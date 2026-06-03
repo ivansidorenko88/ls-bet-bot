@@ -47,16 +47,9 @@ const client = new Client({
 });
 
 const START_BALANCE = Number(process.env.START_BALANCE || 1000);
-
-const EVENT_CHANNEL_ID =
-  process.env.EVENT_CHANNEL_ID || "1510916382395600936";
-
-const RESULT_CHANNEL_ID =
-  process.env.RESULT_CHANNEL_ID || "1510928118527950888";
-
-const COINFLIP_CHANNEL_ID =
-  process.env.COINFLIP_CHANNEL_ID || "1511707250668863578";
-
+const EVENT_CHANNEL_ID = process.env.EVENT_CHANNEL_ID || "1510916382395600936";
+const RESULT_CHANNEL_ID = process.env.RESULT_CHANNEL_ID || "1510928118527950888";
+const COINFLIP_CHANNEL_ID = process.env.COINFLIP_CHANNEL_ID || "1511707250668863578";
 const PROMO_NEW_USER_DAYS = Number(process.env.PROMO_NEW_USER_DAYS || 3);
 
 const LS_THEME = {
@@ -69,7 +62,7 @@ const LS_THEME = {
 };
 
 const LS_TEXT = {
-  footer: "LS Bet • Events • Live Bets • Coinflip",
+  footer: "LS Bet • RP Events • Live Bets • Coinflip",
   line: "━━━━━━━━━━━━━━━━━━━━",
 };
 
@@ -126,6 +119,7 @@ function transactionTypeName(type) {
   if (type === "COINFLIP_WIN") return "Coinflip выигрыш";
   if (type === "COINFLIP_REFUND") return "Coinflip возврат";
   if (type === "PROMO_ACTIVATED") return "Промокод";
+  if (type === "REFERRAL_BONUS") return "Реферальный бонус";
   return type;
 }
 
@@ -202,7 +196,9 @@ async function sendLog(type, title, description, fields = []) {
       .setTitle(title)
       .setDescription(description || "Без описания");
 
-    if (fields.length > 0) embed.addFields(fields);
+    if (fields.length > 0) {
+      embed.addFields(fields);
+    }
 
     await channel.send({
       embeds: [embed],
@@ -253,18 +249,18 @@ function buildMainPanel() {
       [
         "```",
         "LS BET PLATFORM",
-        "EVENTS • LIVE BETS • COINFLIP • PROMO",
+        "RP EVENTS • LIVE BETS • COINFLIP • PROMO",
         "```",
         "**Добро пожаловать в LS Bet.**",
         "",
-        "Здесь ты можешь участвовать в событиях, делать ставки, играть в Coinflip, активировать промокоды и следить за рейтингом победителей.",
+        "Здесь ты можешь участвовать в RP-событиях, делать ставки, играть в Coinflip, активировать промокоды и следить за рейтингом победителей.",
         "",
         LS_TEXT.line,
       ].join("\n")
     )
     .addFields(
       {
-        name: "🎰 Cобытия",
+        name: "🎰 RP-события",
         value: "Афиши, коэффициенты, LIVE-ставки и результаты.",
         inline: true,
       },
@@ -341,7 +337,7 @@ function buildAdminPanel() {
         "```",
         "**Панель управления LS Bet.**",
         "",
-        "Здесь можно управлять событиями, заявками на пополнение, промокодами и публикацией главного меню.",
+        "Здесь можно управлять RP-событиями, заявками на пополнение, промокодами и публикацией главного меню.",
         "",
         LS_TEXT.line,
       ].join("\n")
@@ -359,7 +355,7 @@ function buildAdminPanel() {
       },
       {
         name: "🎟️ Промокоды",
-        value: "Создание и статистика.",
+        value: "Обычные и реферальные промокоды.",
         inline: true,
       }
     );
@@ -392,6 +388,7 @@ function buildAdminPanel() {
     ephemeral: true,
   };
 }
+
 function buildEventPoster(event) {
   const closesUnix = getUnixTime(event.closesAt);
   const eventBank = getEventBank(event);
@@ -547,7 +544,7 @@ async function publishRpEventResult(event, winnerOption, winnersCount, totalPaid
     const resultChannel = await client.channels.fetch(RESULT_CHANNEL_ID);
 
     if (!resultChannel || !resultChannel.isTextBased()) {
-      console.error("Канал результатов событий не найден или бот не может туда писать.");
+      console.error("Канал результатов RP-событий не найден или бот не может туда писать.");
       return;
     }
 
@@ -576,11 +573,11 @@ async function publishRpEventResult(event, winnerOption, winnersCount, totalPaid
     }
 
     await resultChannel.send({
-      content: "🏁 **Итоги события**",
+      content: "🏁 **Итоги RP-события**",
       embeds: [embed],
     });
   } catch (error) {
-    console.error("Не смог опубликовать результат события:", error.message);
+    console.error("Не смог опубликовать результат RP-события:", error.message);
   }
 }
 
@@ -615,6 +612,21 @@ async function showProfile(interaction) {
   const coinflipWins = await prisma.coinflipGame.count({
     where: {
       winnerUserId: user.id,
+    },
+  });
+
+  const referralsCount = await prisma.user.count({
+    where: {
+      referredByUserId: user.id,
+    },
+  });
+
+  const referralEarned = await prisma.referralReward.aggregate({
+    where: {
+      referrerId: user.id,
+    },
+    _sum: {
+      amount: true,
     },
   });
 
@@ -664,6 +676,16 @@ async function showProfile(interaction) {
       {
         name: "Процент побед",
         value: `${winPercent}%`,
+        inline: true,
+      },
+      {
+        name: "Рефералов",
+        value: String(referralsCount),
+        inline: true,
+      },
+      {
+        name: "Заработано с рефералов",
+        value: formatMoney(referralEarned._sum.amount || 0),
         inline: true,
       }
     );
@@ -741,6 +763,7 @@ async function showHistory(interaction) {
     ephemeral: true,
   });
 }
+
 async function showTop(interaction) {
   const users = await prisma.user.findMany({
     orderBy: {
@@ -1125,6 +1148,7 @@ async function sendTopUpModerationLog(requestId) {
     components: [row],
   });
 }
+
 async function approveTopUp(interaction, requestId) {
   if (await adminOnly(interaction)) return;
 
@@ -1133,7 +1157,11 @@ async function approveTopUp(interaction, requestId) {
       id: requestId,
     },
     include: {
-      user: true,
+      user: {
+        include: {
+          referredBy: true,
+        },
+      },
     },
   });
 
@@ -1158,8 +1186,17 @@ async function approveTopUp(interaction, requestId) {
     });
   }
 
-  await prisma.$transaction([
-    prisma.user.update({
+  let referralBonus = 0;
+  let referrer = null;
+  let refPercent = request.user.refPercent || 0;
+
+  if (request.user.referredBy && refPercent >= 1 && refPercent <= 100) {
+    referrer = request.user.referredBy;
+    referralBonus = Math.floor((request.amount * refPercent) / 100);
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({
       where: {
         id: request.userId,
       },
@@ -1168,9 +1205,9 @@ async function approveTopUp(interaction, requestId) {
           increment: request.amount,
         },
       },
-    }),
+    });
 
-    prisma.topUpRequest.update({
+    await tx.topUpRequest.update({
       where: {
         id: request.id,
       },
@@ -1179,17 +1216,50 @@ async function approveTopUp(interaction, requestId) {
         processedBy: interaction.user.id,
         processedAt: new Date(),
       },
-    }),
+    });
 
-    prisma.transaction.create({
+    await tx.transaction.create({
       data: {
         userId: request.userId,
         amount: request.amount,
         type: "TOPUP_APPROVED",
         comment: `Пополнение через ticket #${request.id}. Одобрил ${interaction.user.username}`,
       },
-    }),
-  ]);
+    });
+
+    if (referrer && referralBonus > 0) {
+      await tx.user.update({
+        where: {
+          id: referrer.id,
+        },
+        data: {
+          balance: {
+            increment: referralBonus,
+          },
+        },
+      });
+
+      await tx.transaction.create({
+        data: {
+          userId: referrer.id,
+          amount: referralBonus,
+          type: "REFERRAL_BONUS",
+          comment: `Реферальный бонус ${refPercent}% с пополнения <@${request.user.discordId}> на ${formatMoney(request.amount)}`,
+        },
+      });
+
+      await tx.referralReward.create({
+        data: {
+          referrerId: referrer.id,
+          referredId: request.userId,
+          topUpId: request.id,
+          amount: referralBonus,
+          percent: refPercent,
+          sourceAmount: request.amount,
+        },
+      });
+    }
+  });
 
   if (request.ticketChannelId) {
     try {
@@ -1226,13 +1296,59 @@ async function approveTopUp(interaction, requestId) {
         value: request.login,
         inline: true,
       },
+      ...(referrer && referralBonus > 0
+        ? [
+            {
+              name: "Реферер",
+              value: `<@${referrer.discordId}>`,
+              inline: true,
+            },
+            {
+              name: "Реф. процент",
+              value: `${refPercent}%`,
+              inline: true,
+            },
+            {
+              name: "Реф. бонус",
+              value: formatMoney(referralBonus),
+              inline: true,
+            },
+          ]
+        : []),
     ]
   );
 
+  if (referrer && referralBonus > 0) {
+    await sendLog(
+      "REFERRAL_BONUS",
+      "🤝 Начислен реферальный бонус",
+      `<@${referrer.discordId}> получил бонус за пополнение реферала <@${request.user.discordId}>.`,
+      [
+        {
+          name: "Сумма пополнения",
+          value: formatMoney(request.amount),
+          inline: true,
+        },
+        {
+          name: "Процент",
+          value: `${refPercent}%`,
+          inline: true,
+        },
+        {
+          name: "Бонус",
+          value: formatMoney(referralBonus),
+          inline: true,
+        },
+      ]
+    );
+  }
+
   return interaction.reply({
-    content: `✅ Заявка #${request.id} одобрена. Игроку начислено ${formatMoney(
-      request.amount
-    )}.`,
+    content:
+      `✅ Заявка #${request.id} одобрена. Игроку начислено ${formatMoney(request.amount)}.` +
+      (referrer && referralBonus > 0
+        ? `\n🤝 Реферер <@${referrer.discordId}> получил ${formatMoney(referralBonus)} (${refPercent}%).`
+        : ""),
     ephemeral: true,
   });
 }
@@ -1588,6 +1704,7 @@ async function showAdminEvents(interaction) {
     ephemeral: true,
   });
 }
+
 async function adminSetEventLive(interaction, eventId) {
   if (await adminOnly(interaction)) return;
 
@@ -1948,7 +2065,9 @@ function buildCoinflipButtons(game) {
   );
 
   return [row];
-}async function getCoinflipGame(gameId) {
+}
+
+async function getCoinflipGame(gameId) {
   return prisma.coinflipGame.findUnique({
     where: {
       id: gameId,
@@ -2301,6 +2420,7 @@ async function cancelCoinflip(interaction, gameId) {
     ephemeral: true,
   });
 }
+
 function buildPromoModal() {
   const modal = new ModalBuilder()
     .setCustomId("promo_activate_modal")
@@ -2321,7 +2441,7 @@ function buildPromoModal() {
 function buildPromoCreateModal() {
   const modal = new ModalBuilder()
     .setCustomId("promo_create_modal")
-    .setTitle("LS Bet — создать промокод");
+    .setTitle("LS Bet — обычный промокод");
 
   const codeInput = new TextInputBuilder()
     .setCustomId("code")
@@ -2353,6 +2473,57 @@ function buildPromoCreateModal() {
   return modal;
 }
 
+function buildReferralPromoCreateModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("promo_create_referral_modal")
+    .setTitle("LS Bet — реферальный промокод");
+
+  const codeInput = new TextInputBuilder()
+    .setCustomId("code")
+    .setLabel("Код промокода")
+    .setPlaceholder("Например: MOSCOW")
+    .setRequired(true)
+    .setStyle(TextInputStyle.Short);
+
+  const ownerInput = new TextInputBuilder()
+    .setCustomId("ownerDiscordId")
+    .setLabel("Discord ID владельца")
+    .setPlaceholder("Например: 123456789012345678")
+    .setRequired(true)
+    .setStyle(TextInputStyle.Short);
+
+  const amountInput = new TextInputBuilder()
+    .setCustomId("amount")
+    .setLabel("Бонус новому игроку в $")
+    .setPlaceholder("Например: 1000")
+    .setRequired(true)
+    .setStyle(TextInputStyle.Short);
+
+  const percentInput = new TextInputBuilder()
+    .setCustomId("refPercent")
+    .setLabel("Процент рефереру от 1 до 100")
+    .setPlaceholder("Например: 5")
+    .setRequired(true)
+    .setStyle(TextInputStyle.Short);
+
+  const maxUsesInput = new TextInputBuilder()
+    .setCustomId("maxUses")
+    .setLabel("Лимит активаций")
+    .setPlaceholder("Например: 50. Можно оставить пустым.")
+    .setRequired(false)
+    .setStyle(TextInputStyle.Short);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(codeInput),
+    new ActionRowBuilder().addComponents(ownerInput),
+    new ActionRowBuilder().addComponents(amountInput),
+    new ActionRowBuilder().addComponents(percentInput),
+    new ActionRowBuilder().addComponents(maxUsesInput)
+  );
+
+  return modal;
+}
+
 function buildAdminPromoPanel() {
   const embed = createBaseEmbed(LS_THEME.gold)
     .setTitle("🎟️ LS Bet — Промокоды")
@@ -2360,11 +2531,14 @@ function buildAdminPromoPanel() {
       [
         "```",
         "PROMO CONTROL",
-        "CREATE • STATS • NEW USERS ONLY",
+        "BONUS • REFERRAL • STATS",
         "```",
-        "Здесь можно создать промокод и посмотреть статистику.",
+        "Здесь можно управлять обычными и реферальными промокодами.",
         "",
-        `Промокод может активировать только пользователь, который зашёл на сервер за последние **${PROMO_NEW_USER_DAYS} дня**.`,
+        "**Обычный промокод** — выдаёт бонус игроку.",
+        "**Реферальный промокод** — закрепляется за Discord-пользователем.",
+        "",
+        "Владелец реферального промокода получает процент со всех одобренных пополнений своих рефералов.",
         "",
         LS_TEXT.line,
       ].join("\n")
@@ -2373,12 +2547,22 @@ function buildAdminPromoPanel() {
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("promo_create")
-      .setLabel("➕ Создать")
+      .setLabel("➕ Обычный")
       .setStyle(ButtonStyle.Success),
 
     new ButtonBuilder()
+      .setCustomId("promo_create_referral")
+      .setLabel("🤝 Реферальный")
+      .setStyle(ButtonStyle.Primary),
+
+    new ButtonBuilder()
       .setCustomId("promo_stats")
-      .setLabel("📊 Статистика")
+      .setLabel("📊 Промокоды")
+      .setStyle(ButtonStyle.Secondary),
+
+    new ButtonBuilder()
+      .setCustomId("referral_stats")
+      .setLabel("📈 Рефералы")
       .setStyle(ButtonStyle.Secondary)
   );
 
@@ -2427,6 +2611,7 @@ async function createPromoCode(interaction, codeRaw, amount, maxUsesRaw) {
         maxUses,
         createdBy: interaction.user.id,
         isActive: true,
+        type: "BONUS",
       },
     });
 
@@ -2449,9 +2634,127 @@ async function createPromoCode(interaction, codeRaw, amount, maxUsesRaw) {
     );
 
     return interaction.reply({
-      content: `✅ Промокод **${promo.code}** создан. Сумма: **${formatMoney(
+      content: `✅ Обычный промокод **${promo.code}** создан. Сумма: **${formatMoney(
         amount
       )}**.`,
+      ephemeral: true,
+    });
+  } catch (error) {
+    return interaction.reply({
+      content: "Такой промокод уже существует.",
+      ephemeral: true,
+    });
+  }
+}
+
+async function createReferralPromoCode(
+  interaction,
+  codeRaw,
+  ownerDiscordIdRaw,
+  amount,
+  refPercentRaw,
+  maxUsesRaw
+) {
+  if (await adminOnly(interaction)) return;
+
+  const code = codeRaw.trim().toUpperCase();
+  const ownerDiscordId = ownerDiscordIdRaw.trim();
+  const refPercent = Number(refPercentRaw);
+
+  const maxUses =
+    maxUsesRaw && String(maxUsesRaw).trim() !== ""
+      ? Number(maxUsesRaw)
+      : null;
+
+  if (!code || code.length < 3) {
+    return interaction.reply({
+      content: "Код должен быть минимум 3 символа.",
+      ephemeral: true,
+    });
+  }
+
+  if (!ownerDiscordId || !/^\d+$/.test(ownerDiscordId)) {
+    return interaction.reply({
+      content: "Введи корректный Discord ID владельца.",
+      ephemeral: true,
+    });
+  }
+
+  if (!Number.isInteger(amount) || amount < 0) {
+    return interaction.reply({
+      content: "Бонус новому игроку должен быть числом 0 или больше.",
+      ephemeral: true,
+    });
+  }
+
+  if (!Number.isInteger(refPercent) || refPercent < 1 || refPercent > 100) {
+    return interaction.reply({
+      content: "Процент рефереру должен быть от 1 до 100.",
+      ephemeral: true,
+    });
+  }
+
+  if (maxUses !== null && (!Number.isInteger(maxUses) || maxUses <= 0)) {
+    return interaction.reply({
+      content: "Лимит активаций должен быть числом больше 0.",
+      ephemeral: true,
+    });
+  }
+
+  const ownerDiscordUser = await client.users.fetch(ownerDiscordId).catch(() => null);
+
+  if (!ownerDiscordUser) {
+    return interaction.reply({
+      content: "Не смог найти пользователя Discord по этому ID.",
+      ephemeral: true,
+    });
+  }
+
+  const ownerUser = await getOrCreateUser(ownerDiscordUser);
+
+  try {
+    const promo = await prisma.promoCode.create({
+      data: {
+        code,
+        amount,
+        maxUses,
+        createdBy: interaction.user.id,
+        isActive: true,
+        type: "REFERRAL",
+        ownerUserId: ownerUser.id,
+        refPercent,
+      },
+    });
+
+    await sendLog(
+      "REFERRAL_PROMO_CREATED",
+      "🤝 Реферальный промокод создан",
+      `Модератор <@${interaction.user.id}> создал реферальный промокод **${promo.code}** для <@${ownerDiscordId}>.`,
+      [
+        {
+          name: "Бонус новому игроку",
+          value: formatMoney(amount),
+          inline: true,
+        },
+        {
+          name: "Процент рефереру",
+          value: `${refPercent}%`,
+          inline: true,
+        },
+        {
+          name: "Лимит",
+          value: maxUses ? String(maxUses) : "Без лимита",
+          inline: true,
+        },
+      ]
+    );
+
+    return interaction.reply({
+      content:
+        `✅ Реферальный промокод **${promo.code}** создан.\n` +
+        `Владелец: <@${ownerDiscordId}>\n` +
+        `Бонус новому игроку: **${formatMoney(amount)}**\n` +
+        `Процент с пополнений: **${refPercent}%**`,
       ephemeral: true,
     });
   } catch (error) {
@@ -2472,6 +2775,7 @@ async function showPromoStats(interaction) {
     take: 10,
     include: {
       activations: true,
+      owner: true,
     },
   });
 
@@ -2490,19 +2794,96 @@ async function showPromoStats(interaction) {
       );
 
       return [
-        `🎟️ **${promo.code}**`,
-        `Сумма: **${formatMoney(promo.amount)}**`,
+        `${promo.type === "REFERRAL" ? "🤝" : "🎟️"} **${promo.code}**`,
+        `Тип: **${promo.type === "REFERRAL" ? "Реферальный" : "Обычный"}**`,
+        promo.type === "REFERRAL" && promo.owner
+          ? `Владелец: <@${promo.owner.discordId}>`
+          : null,
+        promo.type === "REFERRAL"
+          ? `Процент: **${promo.refPercent || 5}%**`
+          : null,
+        `Бонус игроку: **${formatMoney(promo.amount)}**`,
         `Использований: **${promo.usesCount}${
           promo.maxUses ? ` / ${promo.maxUses}` : ""
         }**`,
         `Выдано всего: **${formatMoney(totalIssued)}**`,
         `Статус: **${promo.isActive ? "Активен" : "Выключен"}**`,
-      ].join("\n");
+      ]
+        .filter(Boolean)
+        .join("\n");
     })
     .join("\n\n");
 
   const embed = createBaseEmbed(LS_THEME.gold)
     .setTitle("📊 Статистика промокодов")
+    .setDescription(text);
+
+  return interaction.reply({
+    embeds: [embed],
+    ephemeral: true,
+  });
+}
+
+async function showReferralStats(interaction) {
+  if (await adminOnly(interaction)) return;
+
+  const referralPromos = await prisma.promoCode.findMany({
+    where: {
+      type: "REFERRAL",
+    },
+    orderBy: {
+      id: "desc",
+    },
+    take: 10,
+    include: {
+      owner: {
+        include: {
+          referrals: true,
+          referralRewardsReceived: true,
+        },
+      },
+      activations: true,
+    },
+  });
+
+  if (referralPromos.length === 0) {
+    return interaction.reply({
+      content: "Реферальных промокодов пока нет.",
+      ephemeral: true,
+    });
+  }
+
+  const text = referralPromos
+    .map((promo) => {
+      const owner = promo.owner;
+
+      const referralsCount = owner?.referrals?.length || 0;
+
+      const totalEarned =
+        owner?.referralRewardsReceived?.reduce((sum, item) => {
+          return sum + item.amount;
+        }, 0) || 0;
+
+      const totalTopups =
+        owner?.referralRewardsReceived?.reduce((sum, item) => {
+          return sum + item.sourceAmount;
+        }, 0) || 0;
+
+      return [
+        `🤝 **${promo.code}**`,
+        `Владелец: ${owner ? `<@${owner.discordId}>` : "Не найден"}`,
+        `Бонус новому игроку: **${formatMoney(promo.amount)}**`,
+        `Процент: **${promo.refPercent || 5}%**`,
+        `Активаций: **${promo.usesCount}${promo.maxUses ? ` / ${promo.maxUses}` : ""}**`,
+        `Рефералов у владельца: **${referralsCount}**`,
+        `Пополнений рефералов: **${formatMoney(totalTopups)}**`,
+        `Заработано владельцем: **${formatMoney(totalEarned)}**`,
+      ].join("\n");
+    })
+    .join("\n\n");
+
+  const embed = createBaseEmbed(LS_THEME.gold)
+    .setTitle("📈 Статистика рефералов")
     .setDescription(text);
 
   return interaction.reply({
@@ -2539,6 +2920,9 @@ async function activatePromoCode(interaction, codeRaw) {
     where: {
       code,
     },
+    include: {
+      owner: true,
+    },
   });
 
   if (!promo || !promo.isActive) {
@@ -2569,19 +2953,65 @@ async function activatePromoCode(interaction, codeRaw) {
     });
   }
 
-  await prisma.$transaction([
-    prisma.user.update({
-      where: {
-        id: user.id,
-      },
-      data: {
-        balance: {
-          increment: promo.amount,
-        },
-      },
-    }),
+  if (promo.type === "REFERRAL") {
+    if (!promo.ownerUserId || !promo.owner) {
+      return interaction.reply({
+        content: "У этого реферального промокода не найден владелец.",
+        ephemeral: true,
+      });
+    }
 
-    prisma.promoCode.update({
+    if (promo.ownerUserId === user.id) {
+      return interaction.reply({
+        content: "Нельзя активировать свой собственный реферальный промокод.",
+        ephemeral: true,
+      });
+    }
+
+    if (user.referredByUserId && user.referredByUserId !== promo.ownerUserId) {
+      return interaction.reply({
+        content: "За тобой уже закреплён другой реферер. Сменить его нельзя.",
+        ephemeral: true,
+      });
+    }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    if (promo.amount > 0) {
+      await tx.user.update({
+        where: {
+          id: user.id,
+        },
+        data: {
+          balance: {
+            increment: promo.amount,
+          },
+        },
+      });
+
+      await tx.transaction.create({
+        data: {
+          userId: user.id,
+          amount: promo.amount,
+          type: "PROMO_ACTIVATED",
+          comment: `Активация промокода ${promo.code}`,
+        },
+      });
+    }
+
+    if (promo.type === "REFERRAL") {
+      await tx.user.update({
+        where: {
+          id: user.id,
+        },
+        data: {
+          referredByUserId: promo.ownerUserId,
+          refPercent: promo.refPercent || 5,
+        },
+      });
+    }
+
+    await tx.promoCode.update({
       where: {
         id: promo.id,
       },
@@ -2590,33 +3020,26 @@ async function activatePromoCode(interaction, codeRaw) {
           increment: 1,
         },
       },
-    }),
+    });
 
-    prisma.promoActivation.create({
+    await tx.promoActivation.create({
       data: {
         promoCodeId: promo.id,
         userId: user.id,
         amount: promo.amount,
       },
-    }),
-
-    prisma.transaction.create({
-      data: {
-        userId: user.id,
-        amount: promo.amount,
-        type: "PROMO_ACTIVATED",
-        comment: `Активация промокода ${promo.code}`,
-      },
-    }),
-  ]);
+    });
+  });
 
   await sendLog(
-    "PROMO_ACTIVATED",
-    "🎟️ Промокод активирован",
+    promo.type === "REFERRAL" ? "REFERRAL_PROMO_ACTIVATED" : "PROMO_ACTIVATED",
+    promo.type === "REFERRAL"
+      ? "🤝 Реферальный промокод активирован"
+      : "🎟️ Промокод активирован",
     `Игрок <@${interaction.user.id}> активировал промокод **${promo.code}**.`,
     [
       {
-        name: "Сумма",
+        name: "Бонус игроку",
         value: formatMoney(promo.amount),
         inline: true,
       },
@@ -2625,16 +3048,41 @@ async function activatePromoCode(interaction, codeRaw) {
         value: promo.code,
         inline: true,
       },
+      {
+        name: "Тип",
+        value: promo.type === "REFERRAL" ? "Реферальный" : "Обычный",
+        inline: true,
+      },
+      ...(promo.type === "REFERRAL" && promo.owner
+        ? [
+            {
+              name: "Реферер",
+              value: `<@${promo.owner.discordId}>`,
+              inline: true,
+            },
+            {
+              name: "Процент",
+              value: `${promo.refPercent || 5}%`,
+              inline: true,
+            },
+          ]
+        : []),
     ]
   );
 
   return interaction.reply({
-    content: `✅ Промокод **${promo.code}** активирован. Начислено **${formatMoney(
-      promo.amount
-    )}**.`,
+    content:
+      promo.type === "REFERRAL"
+        ? `✅ Реферальный промокод **${promo.code}** активирован.\nТы получил **${formatMoney(
+            promo.amount
+          )}**.\nТвой реферер: <@${promo.owner.discordId}>.`
+        : `✅ Промокод **${promo.code}** активирован. Начислено **${formatMoney(
+            promo.amount
+          )}**.`,
     ephemeral: true,
   });
 }
+
 client.once(Events.ClientReady, async () => {
   console.log(`LS Bet Bot запущен как ${client.user.tag}`);
 
@@ -2721,13 +3169,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "panel") {
         if (await adminOnly(interaction)) return;
-
         return interaction.reply(buildMainPanel());
       }
 
       if (interaction.commandName === "admin_panel") {
         if (await adminOnly(interaction)) return;
-
         return interaction.reply(buildAdminPanel());
       }
 
@@ -2736,7 +3182,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (interaction.channelId !== EVENT_CHANNEL_ID) {
           return interaction.reply({
-            content: `⛔ Создавать cобытия можно только в канале <#${EVENT_CHANNEL_ID}>.`,
+            content: `⛔ Создавать RP-события можно только в канале <#${EVENT_CHANNEL_ID}>.`,
             ephemeral: true,
           });
         }
@@ -2770,7 +3216,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!eventChannel || !eventChannel.isTextBased()) {
           return interaction.reply({
             content:
-              "⛔ Канал для публикации cобытий не найден или бот не может туда писать.",
+              "⛔ Канал для публикации RP-событий не найден или бот не может туда писать.",
             ephemeral: true,
           });
         }
@@ -2926,6 +3372,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
       }
     }
+
     if (interaction.isButton()) {
       if (interaction.customId === "admin_events") {
         return showAdminEvents(interaction);
@@ -2937,18 +3384,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.customId === "admin_promos") {
         if (await adminOnly(interaction)) return;
-
         return interaction.reply(buildAdminPromoPanel());
       }
 
       if (interaction.customId === "promo_create") {
         if (await adminOnly(interaction)) return;
-
         return interaction.showModal(buildPromoCreateModal());
+      }
+
+      if (interaction.customId === "promo_create_referral") {
+        if (await adminOnly(interaction)) return;
+        return interaction.showModal(buildReferralPromoCreateModal());
       }
 
       if (interaction.customId === "promo_stats") {
         return showPromoStats(interaction);
+      }
+
+      if (interaction.customId === "referral_stats") {
+        return showReferralStats(interaction);
       }
 
       if (interaction.customId === "admin_public_panel") {
@@ -2964,13 +3418,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.customId.startsWith("admin_live:")) {
         const [, eventIdRaw] = interaction.customId.split(":");
-
         return adminSetEventLive(interaction, Number(eventIdRaw));
       }
 
       if (interaction.customId.startsWith("admin_finish:")) {
         const [, eventIdRaw, winnerRaw] = interaction.customId.split(":");
-
         return adminFinishEvent(
           interaction,
           Number(eventIdRaw),
@@ -2994,19 +3446,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.customId.startsWith("topup_approve:")) {
         const [, requestIdRaw] = interaction.customId.split(":");
-
         return approveTopUp(interaction, Number(requestIdRaw));
       }
 
       if (interaction.customId.startsWith("topup_reject:")) {
         const [, requestIdRaw] = interaction.customId.split(":");
-
         return rejectTopUp(interaction, Number(requestIdRaw));
       }
 
       if (interaction.customId.startsWith("ticket_close:")) {
         const [, requestIdRaw] = interaction.customId.split(":");
-
         return closeTicket(interaction, Number(requestIdRaw));
       }
 
@@ -3047,19 +3496,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.customId.startsWith("coinflip_side:")) {
         const [, side] = interaction.customId.split(":");
-
         return interaction.showModal(buildCoinflipAmountModal(side));
       }
 
       if (interaction.customId.startsWith("coinflip_accept:")) {
         const [, gameIdRaw] = interaction.customId.split(":");
-
         return acceptCoinflip(interaction, Number(gameIdRaw));
       }
 
       if (interaction.customId.startsWith("coinflip_cancel:")) {
         const [, gameIdRaw] = interaction.customId.split(":");
-
         return cancelCoinflip(interaction, Number(gameIdRaw));
       }
 
@@ -3069,7 +3515,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.customId.startsWith("event_stats:")) {
         const [, eventIdRaw] = interaction.customId.split(":");
-
         return showEventStats(interaction, Number(eventIdRaw));
       }
 
@@ -3146,9 +3591,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return createPromoCode(interaction, code, amount, maxUses);
       }
 
+      if (interaction.customId === "promo_create_referral_modal") {
+        const code = interaction.fields.getTextInputValue("code");
+        const ownerDiscordId = interaction.fields.getTextInputValue("ownerDiscordId");
+        const amount = Number(interaction.fields.getTextInputValue("amount"));
+        const refPercent = interaction.fields.getTextInputValue("refPercent");
+        const maxUses = interaction.fields.getTextInputValue("maxUses");
+
+        return createReferralPromoCode(
+          interaction,
+          code,
+          ownerDiscordId,
+          amount,
+          refPercent,
+          maxUses
+        );
+      }
+
       if (interaction.customId === "promo_activate_modal") {
         const code = interaction.fields.getTextInputValue("code");
-
         return activatePromoCode(interaction, code);
       }
 

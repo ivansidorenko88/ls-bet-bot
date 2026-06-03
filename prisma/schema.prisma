@@ -9,10 +9,16 @@ datasource db {
 
 model User {
   id        Int      @id @default(autoincrement())
-  discordId String  @unique
+  discordId String   @unique
   username  String
-  balance   Int     @default(1000)
+  balance   Int      @default(1000)
   createdAt DateTime @default(now())
+
+  referredByUserId Int?
+  refPercent       Int?
+
+  referredBy User?  @relation("UserReferrals", fields: [referredByUserId], references: [id])
+  referrals  User[] @relation("UserReferrals")
 
   bets          Bet[]
   transactions  Transaction[]
@@ -23,6 +29,10 @@ model User {
   coinflipWins     CoinflipGame[] @relation("CoinflipWinner")
 
   promoActivations PromoActivation[]
+  ownedPromoCodes  PromoCode[] @relation("PromoOwner")
+
+  referralRewardsReceived  ReferralReward[] @relation("ReferralRewardsReceived")
+  referralRewardsGenerated ReferralReward[] @relation("ReferralRewardsGenerated")
 }
 
 model RpEvent {
@@ -91,7 +101,8 @@ model TopUpRequest {
   processedAt     DateTime?
   createdAt       DateTime  @default(now())
 
-  user User @relation(fields: [userId], references: [id])
+  user           User            @relation(fields: [userId], references: [id])
+  referralReward ReferralReward?
 }
 
 model BotLog {
@@ -136,6 +147,11 @@ model PromoCode {
   createdBy String?
   createdAt DateTime @default(now())
 
+  type        String @default("BONUS")
+  ownerUserId Int?
+  refPercent  Int?
+
+  owner       User? @relation("PromoOwner", fields: [ownerUserId], references: [id])
   activations PromoActivation[]
 }
 
@@ -150,4 +166,19 @@ model PromoActivation {
   user      User      @relation(fields: [userId], references: [id])
 
   @@unique([promoCodeId, userId])
+}
+
+model ReferralReward {
+  id           Int      @id @default(autoincrement())
+  referrerId   Int
+  referredId   Int
+  topUpId      Int      @unique
+  amount       Int
+  percent      Int
+  sourceAmount Int
+  createdAt    DateTime @default(now())
+
+  referrer User         @relation("ReferralRewardsReceived", fields: [referrerId], references: [id])
+  referred User         @relation("ReferralRewardsGenerated", fields: [referredId], references: [id])
+  topUp    TopUpRequest @relation(fields: [topUpId], references: [id])
 }
