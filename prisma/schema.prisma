@@ -20,9 +20,10 @@ model User {
   referredBy User?  @relation("UserReferrals", fields: [referredByUserId], references: [id])
   referrals  User[] @relation("UserReferrals")
 
-  bets          Bet[]
-  transactions  Transaction[]
-  topUpRequests TopUpRequest[]
+  bets             Bet[]
+  transactions     Transaction[]
+  topUpRequests    TopUpRequest[]
+  withdrawRequests WithdrawRequest[]
 
   coinflipCreated  CoinflipGame[] @relation("CoinflipCreated")
   coinflipOpponent CoinflipGame[] @relation("CoinflipOpponent")
@@ -103,6 +104,24 @@ model TopUpRequest {
 
   user           User            @relation(fields: [userId], references: [id])
   referralReward ReferralReward?
+}
+
+model WithdrawRequest {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  login           String
+  amount          Int
+  commission      Int
+  payoutAmount    Int
+  details         String
+  comment         String?
+  ticketChannelId String?
+  status          String    @default("PENDING")
+  processedBy     String?
+  processedAt     DateTime?
+  createdAt       DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
 }
 
 model BotLog {
