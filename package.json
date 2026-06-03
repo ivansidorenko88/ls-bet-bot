@@ -1,0 +1,27 @@
+{
+  "name": "ls-events-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "nodemon index.js",
+    "start": "node index.js",
+    "commands": "node deploy-commands.js",
+    "db": "npx prisma db push --schema=prisma/schema.prisma && npx prisma generate --schema=prisma/schema.prisma"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@discordjs/util": "^1.2.0",
+    "@prisma/client": "^6.19.0",
+    "discord.js": "^14.26.4",
+    "dotenv": "^17.4.2",
+    "prisma": "^6.19.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}

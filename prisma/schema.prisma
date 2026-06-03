@@ -1,0 +1,153 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  discordId String  @unique
+  username  String
+  balance   Int     @default(1000)
+  createdAt DateTime @default(now())
+
+  bets          Bet[]
+  transactions  Transaction[]
+  topUpRequests TopUpRequest[]
+
+  coinflipCreated  CoinflipGame[] @relation("CoinflipCreated")
+  coinflipOpponent CoinflipGame[] @relation("CoinflipOpponent")
+  coinflipWins     CoinflipGame[] @relation("CoinflipWinner")
+
+  promoActivations PromoActivation[]
+}
+
+model RpEvent {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String?
+  status      String   @default("OPEN")
+  closesAt    DateTime
+  createdBy   String?
+  messageId   String?
+  channelId   String?
+  createdAt   DateTime @default(now())
+
+  options EventOption[]
+  bets    Bet[]
+}
+
+model EventOption {
+  id       Int     @id @default(autoincrement())
+  eventId  Int
+  title    String
+  odds     Float
+  imageUrl String?
+  isWinner Boolean @default(false)
+
+  event RpEvent @relation(fields: [eventId], references: [id])
+  bets  Bet[]
+}
+
+model Bet {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  eventId      Int
+  optionId     Int
+  amount       Int
+  potentialWin Int
+  status       String   @default("ACTIVE")
+  createdAt    DateTime @default(now())
+
+  user   User        @relation(fields: [userId], references: [id])
+  event  RpEvent     @relation(fields: [eventId], references: [id])
+  option EventOption @relation(fields: [optionId], references: [id])
+}
+
+model Transaction {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  amount    Int
+  type      String
+  comment   String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model TopUpRequest {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  login           String
+  amount          Int
+  comment         String?
+  screenshotUrl   String?
+  ticketChannelId String?
+  status          String    @default("PENDING")
+  processedBy     String?
+  processedAt     DateTime?
+  createdAt       DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model BotLog {
+  id        Int      @id @default(autoincrement())
+  type      String
+  message   String
+  userId    String?
+  channelId String?
+  createdAt DateTime @default(now())
+}
+
+model CoinflipGame {
+  id             Int       @id @default(autoincrement())
+  creatorUserId  Int
+  opponentUserId Int?
+  winnerUserId   Int?
+
+  amount       Int
+  creatorSide  String
+  opponentSide String?
+  resultSide   String?
+
+  status    String    @default("WAITING")
+  messageId String?
+  channelId String?
+
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  creator  User  @relation("CoinflipCreated", fields: [creatorUserId], references: [id])
+  opponent User? @relation("CoinflipOpponent", fields: [opponentUserId], references: [id])
+  winner   User? @relation("CoinflipWinner", fields: [winnerUserId], references: [id])
+}
+
+model PromoCode {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique
+  amount    Int
+  maxUses   Int?
+  usesCount Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  activations PromoActivation[]
+}
+
+model PromoActivation {
+  id          Int      @id @default(autoincrement())
+  promoCodeId Int
+  userId      Int
+  amount      Int
+  createdAt   DateTime @default(now())
+
+  promoCode PromoCode @relation(fields: [promoCodeId], references: [id])
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@unique([promoCodeId, userId])
+}
