@@ -7,7 +7,8 @@
     "start": "npm run db && node index.js",
     "dev": "nodemon index.js",
     "commands": "node deploy-commands.js",
-    "db": "npx prisma generate --schema=prisma/schema.prisma && npx prisma db push --schema=prisma/schema.prisma"
+    "db": "npx prisma generate --schema=prisma/schema.prisma && npx prisma db push --schema=prisma/schema.prisma",
+    "postinstall": "npx prisma generate --schema=prisma/schema.prisma"
   },
   "keywords": [],
   "author": "LS Bet",

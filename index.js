@@ -1,5 +1,23 @@
 require("dotenv").config();
 
+const { execSync } = require("child_process");
+
+try {
+  console.log("🔧 Prisma generate...");
+  execSync("npx prisma generate --schema=prisma/schema.prisma", {
+    stdio: "inherit",
+  });
+
+  console.log("🔧 Prisma db push...");
+  execSync("npx prisma db push --schema=prisma/schema.prisma", {
+    stdio: "inherit",
+  });
+
+  console.log("✅ Prisma ready");
+} catch (error) {
+  console.error("❌ Prisma prepare error:", error.message);
+}
+
 const {
   Client,
   GatewayIntentBits,
