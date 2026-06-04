@@ -11,7 +11,7 @@ model User {
   id        Int      @id @default(autoincrement())
   discordId String   @unique
   username  String
-  balance   Int      @default(1000)
+  balance   Int      @default(0)
   createdAt DateTime @default(now())
 
   referredByUserId Int?
@@ -24,6 +24,7 @@ model User {
   transactions     Transaction[]
   topUpRequests    TopUpRequest[]
   withdrawRequests WithdrawRequest[]
+  lotteryTickets   LotteryTicket[]
 
   coinflipCreated  CoinflipGame[] @relation("CoinflipCreated")
   coinflipOpponent CoinflipGame[] @relation("CoinflipOpponent")
@@ -32,8 +33,8 @@ model User {
   promoActivations PromoActivation[]
   ownedPromoCodes  PromoCode[] @relation("PromoOwner")
 
-  referralRewardsReceived  ReferralReward[] @relation("ReferralRewardsReceived")
-  referralRewardsGenerated ReferralReward[] @relation("ReferralRewardsGenerated")
+  referralRewardsReceived ReferralReward[] @relation("ReferralRewardReferrer")
+  referralRewardsGiven    ReferralReward[] @relation("ReferralRewardReferred")
 }
 
 model RpEvent {
@@ -102,8 +103,8 @@ model TopUpRequest {
   processedAt     DateTime?
   createdAt       DateTime  @default(now())
 
-  user           User            @relation(fields: [userId], references: [id])
-  referralReward ReferralReward?
+  user            User             @relation(fields: [userId], references: [id])
+  referralRewards ReferralReward[]
 }
 
 model WithdrawRequest {
@@ -144,7 +145,7 @@ model CoinflipGame {
   opponentSide String?
   resultSide   String?
 
-  status    String    @default("WAITING")
+  status    String  @default("WAITING")
   messageId String?
   channelId String?
 
@@ -157,20 +158,19 @@ model CoinflipGame {
 }
 
 model PromoCode {
-  id        Int      @id @default(autoincrement())
-  code      String   @unique
-  amount    Int
-  maxUses   Int?
-  usesCount Int      @default(0)
-  isActive  Boolean  @default(true)
-  createdBy String?
-  createdAt DateTime @default(now())
-
-  type        String @default("BONUS")
+  id          Int      @id @default(autoincrement())
+  code        String   @unique
+  amount      Int
+  maxUses     Int?
+  usesCount   Int      @default(0)
+  isActive    Boolean  @default(true)
+  type        String   @default("BONUS")
   ownerUserId Int?
   refPercent  Int?
+  createdBy   String?
+  createdAt   DateTime @default(now())
 
-  owner       User? @relation("PromoOwner", fields: [ownerUserId], references: [id])
+  owner       User?             @relation("PromoOwner", fields: [ownerUserId], references: [id])
   activations PromoActivation[]
 }
 
@@ -188,16 +188,40 @@ model PromoActivation {
 }
 
 model ReferralReward {
-  id           Int      @id @default(autoincrement())
-  referrerId   Int
-  referredId   Int
-  topUpId      Int      @unique
-  amount       Int
-  percent      Int
+  id          Int      @id @default(autoincrement())
+  referrerId  Int
+  referredId  Int
+  topUpId     Int?
+  amount      Int
+  percent     Int
   sourceAmount Int
-  createdAt    DateTime @default(now())
+  createdAt   DateTime @default(now())
 
-  referrer User         @relation("ReferralRewardsReceived", fields: [referrerId], references: [id])
-  referred User         @relation("ReferralRewardsGenerated", fields: [referredId], references: [id])
-  topUp    TopUpRequest @relation(fields: [topUpId], references: [id])
+  referrer User @relation("ReferralRewardReferrer", fields: [referrerId], references: [id])
+  referred User @relation("ReferralRewardReferred", fields: [referredId], references: [id])
+  topUp    TopUpRequest? @relation(fields: [topUpId], references: [id])
+}
+
+model LotteryTicket {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  numbers       String
+  price         Int      @default(1000)
+  status        String   @default("ACTIVE")
+  prize         Int      @default(0)
+  matches       Int      @default(0)
+  drawId        Int?
+  resultNumbers String?
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  draw LotteryDraw? @relation(fields: [drawId], references: [id])
+}
+
+model LotteryDraw {
+  id        Int      @id @default(autoincrement())
+  numbers   String
+  createdAt DateTime @default(now())
+
+  tickets LotteryTicket[]
 }

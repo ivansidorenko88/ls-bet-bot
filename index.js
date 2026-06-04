@@ -4,15 +4,9 @@ const { execSync } = require("child_process");
 
 try {
   console.log("🔧 Prisma generate...");
-  execSync("npx prisma generate --schema=prisma/schema.prisma", {
-    stdio: "inherit",
-  });
-
+  execSync("npx prisma generate --schema=prisma/schema.prisma", { stdio: "inherit" });
   console.log("🔧 Prisma db push...");
-  execSync("npx prisma db push --schema=prisma/schema.prisma", {
-    stdio: "inherit",
-  });
-
+  execSync("npx prisma db push --schema=prisma/schema.prisma", { stdio: "inherit" });
   console.log("✅ Prisma ready");
 } catch (error) {
   console.error("❌ Prisma prepare error:", error.message);
@@ -34,7 +28,6 @@ const {
 } = require("discord.js");
 
 const { PrismaClient } = require("@prisma/client");
-
 const prisma = new PrismaClient();
 
 const client = new Client({
@@ -46,16 +39,19 @@ const client = new Client({
   ],
 });
 
-const START_BALANCE = Number(process.env.START_BALANCE || 1000);
+const START_BALANCE = Number(process.env.START_BALANCE || 0);
 const EVENT_CHANNEL_ID = process.env.EVENT_CHANNEL_ID || "1510916382395600936";
-const RESULT_CHANNEL_ID =
-  process.env.RESULT_CHANNEL_ID || "1510928118527950888";
-const COINFLIP_CHANNEL_ID =
-  process.env.COINFLIP_CHANNEL_ID || "1511707250668863578";
+const RESULT_CHANNEL_ID = process.env.RESULT_CHANNEL_ID || "1510928118527950888";
+const COINFLIP_CHANNEL_ID = process.env.COINFLIP_CHANNEL_ID || "1511707250668863578";
+const LOTTERY_CHANNEL_ID = process.env.LOTTERY_CHANNEL_ID || "1510916530190417990";
 const PROMO_NEW_USER_DAYS = Number(process.env.PROMO_NEW_USER_DAYS || 3);
-const WITHDRAW_COMMISSION_PERCENT = Number(
-  process.env.WITHDRAW_COMMISSION_PERCENT || 5
-);
+const WITHDRAW_COMMISSION_PERCENT = Number(process.env.WITHDRAW_COMMISSION_PERCENT || 5);
+
+const LOTTERY_TICKET_PRICE = Number(process.env.LOTTERY_TICKET_PRICE || 1000);
+const LOTTERY_MIN_NUMBER = 1;
+const LOTTERY_MAX_NUMBER = 36;
+const LOTTERY_NUMBERS_COUNT = 5;
+const LOTTERY_MAX_TICKETS_PER_DRAW = 5;
 
 const LS_THEME = {
   green: 0x18d875,
@@ -65,396 +61,203 @@ const LS_THEME = {
 };
 
 const LS_TEXT = {
-  footer: "LS Bet • Events • Live Bets • Coinflip",
+  footer: "LS Bet • RP Events • Coinflip • Lottery",
   line: "━━━━━━━━━━━━━━━━━━━━",
 };
 
-function createBaseEmbed(color = LS_THEME.green) {
-  return new EmbedBuilder()
-    .setColor(color)
-    .setTimestamp()
-    .setFooter({ text: LS_TEXT.footer });
+function embed(color = LS_THEME.green) {
+  return new EmbedBuilder().setColor(color).setTimestamp().setFooter({ text: LS_TEXT.footer });
 }
 
-function formatMoney(amount) {
+function money(amount) {
   return `$${Number(amount || 0).toLocaleString("en-US")}`;
 }
 
-function getUnixTime(date) {
+function unix(date) {
   return Math.floor(new Date(date).getTime() / 1000);
 }
 
-function getModRoleId() {
-  return process.env.MOD_ROLE_ID || process.env.ADMIN_ROLE_ID || null;
+function isAdmin(interaction) {
+  if (interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) return true;
+  const adminRoleId = process.env.ADMIN_ROLE_ID;
+  const modRoleId = process.env.MOD_ROLE_ID;
+  if (adminRoleId && interaction.member?.roles?.cache?.has(adminRoleId)) return true;
+  if (modRoleId && interaction.member?.roles?.cache?.has(modRoleId)) return true;
+  return false;
 }
 
-function getStatusName(status) {
+async function adminOnly(interaction) {
+  if (isAdmin(interaction)) return false;
+  await interaction.reply({ content: "⛔ Эта команда доступна только администрации.", ephemeral: true });
+  return true;
+}
+
+async function userOf(discordUser) {
+  return prisma.user.upsert({
+    where: { discordId: discordUser.id },
+    update: { username: discordUser.username },
+    create: { discordId: discordUser.id, username: discordUser.username, balance: START_BALANCE },
+  });
+}
+
+async function log(type, title, description, fields = []) {
+  try {
+    await prisma.botLog.create({ data: { type, message: `${title}\n${description || ""}` } });
+  } catch (e) {}
+
+  const channelId = process.env.LOG_CHANNEL_ID;
+  if (!channelId) return;
+
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel?.isTextBased()) return;
+    const e = embed(LS_THEME.green).setTitle(title).setDescription(description || "Без описания");
+    if (fields.length) e.addFields(fields);
+    await channel.send({ embeds: [e] });
+  } catch (error) {
+    console.error("LOG ERROR:", error.message);
+  }
+}
+
+function txName(type) {
+  return {
+    EVENT_BET: "Ставка",
+    EVENT_WIN: "Выигрыш",
+    ADMIN_ADD: "Начисление админа",
+    ADMIN_REMOVE: "Списание админа",
+    BALANCE_SET: "Баланс установлен",
+    TOPUP_APPROVED: "Пополнение",
+    PROMO_ACTIVATED: "Промокод",
+    REFERRAL_BONUS: "Реферальный бонус",
+    COINFLIP_CREATE: "Coinflip создан",
+    COINFLIP_ACCEPT: "Coinflip принят",
+    COINFLIP_WIN: "Coinflip выигрыш",
+    COINFLIP_REFUND: "Coinflip возврат",
+    WITHDRAW_REQUEST: "Заявка на вывод",
+    WITHDRAW_APPROVED: "Вывод одобрен",
+    WITHDRAW_REJECTED: "Вывод отклонён",
+    WITHDRAW_REFUND: "Возврат вывода",
+    LOTTERY_TICKET: "Билет лотереи",
+    LOTTERY_WIN: "Выигрыш лотереи",
+  }[type] || type;
+}
+
+function statusEvent(status) {
   if (status === "OPEN") return "🟢 OPEN";
   if (status === "LIVE") return "🔴 LIVE";
   if (status === "FINISHED") return "🏁 FINISHED";
   return status;
 }
 
-function getBetStatusName(status) {
-  if (status === "ACTIVE") return "🟢 Активна";
-  if (status === "WON") return "✅ Выиграла";
-  if (status === "LOST") return "❌ Проиграла";
-  return status;
-}
-
-function getTopUpStatusName(status) {
-  if (status === "WAITING_SCREENSHOT") return "📎 Ожидает скриншот";
-  if (status === "PENDING") return "⏳ На проверке";
-  if (status === "APPROVED") return "✅ Одобрено";
-  if (status === "REJECTED") return "❌ Отклонено";
-  return status;
-}
-
-function getWithdrawStatusName(status) {
-  if (status === "PENDING") return "⏳ На проверке";
-  if (status === "APPROVED") return "✅ Одобрено";
-  if (status === "REJECTED") return "❌ Отклонено";
-  return status;
-}
-
-function transactionTypeName(type) {
-  if (type === "EVENT_BET") return "Ставка";
-  if (type === "EVENT_WIN") return "Выигрыш";
-  if (type === "ADMIN_ADD") return "Начисление админа";
-  if (type === "TOPUP_APPROVED") return "Пополнение";
-  if (type === "COINFLIP_CREATE") return "Coinflip создан";
-  if (type === "COINFLIP_ACCEPT") return "Coinflip принят";
-  if (type === "COINFLIP_WIN") return "Coinflip выигрыш";
-  if (type === "COINFLIP_REFUND") return "Coinflip возврат";
-  if (type === "PROMO_ACTIVATED") return "Промокод";
-  if (type === "REFERRAL_BONUS") return "Реферальный бонус";
-  if (type === "WITHDRAW_REQUEST") return "Заявка на вывод";
-  if (type === "WITHDRAW_APPROVED") return "Вывод одобрен";
-  if (type === "WITHDRAW_REJECTED") return "Вывод отклонён";
-  if (type === "WITHDRAW_REFUND") return "Возврат вывода";
-  return type;
-}
-
 function isEventClosed(event) {
   return new Date(event.closesAt).getTime() <= Date.now();
 }
 
-function isAdmin(interaction) {
-  if (interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-    return true;
-  }
-
-  const adminRoleId = process.env.ADMIN_ROLE_ID;
-  const modRoleId = process.env.MOD_ROLE_ID;
-
-  if (adminRoleId && interaction.member?.roles?.cache?.has(adminRoleId)) {
-    return true;
-  }
-
-  if (modRoleId && interaction.member?.roles?.cache?.has(modRoleId)) {
-    return true;
-  }
-
-  return false;
+function optionTotal(option) {
+  return (option.bets || []).filter((b) => b.status === "ACTIVE").reduce((s, b) => s + b.amount, 0);
 }
 
-async function adminOnly(interaction) {
-  if (isAdmin(interaction)) return false;
-
-  await interaction.reply({
-    content: "⛔ Эта команда доступна только администрации.",
-    ephemeral: true,
-  });
-
-  return true;
+function eventBank(event) {
+  return (event.options || []).reduce((s, o) => s + optionTotal(o), 0);
 }
 
-async function getOrCreateUser(discordUser) {
-  return prisma.user.upsert({
-    where: { discordId: discordUser.id },
-    update: { username: discordUser.username },
-    create: {
-      discordId: discordUser.id,
-      username: discordUser.username,
-      balance: START_BALANCE,
-    },
-  });
-}
-
-async function sendLog(type, title, description, fields = []) {
-  try {
-    await prisma.botLog.create({
-      data: {
-        type,
-        message: `${title}\n${description || ""}`,
-      },
-    });
-  } catch (error) {
-    console.error("Ошибка записи BotLog:", error.message);
-  }
-
-  const logChannelId = process.env.LOG_CHANNEL_ID;
-  if (!logChannelId) return;
-
-  try {
-    const channel = await client.channels.fetch(logChannelId);
-    if (!channel) return;
-
-    const embed = createBaseEmbed(LS_THEME.green)
-      .setTitle(title)
-      .setDescription(description || "Без описания");
-
-    if (fields.length > 0) embed.addFields(fields);
-
-    await channel.send({ embeds: [embed] });
-  } catch (error) {
-    console.error("Не смог отправить лог:", error.message);
-  }
-}
-
-function getOptionBetTotal(option) {
-  if (!option.bets) return 0;
-
-  return option.bets
-    .filter((bet) => bet.status === "ACTIVE")
-    .reduce((sum, bet) => sum + bet.amount, 0);
-}
-
-function getEventBank(event) {
-  if (!event.options) return 0;
-
-  return event.options.reduce((sum, option) => {
-    return sum + getOptionBetTotal(option);
-  }, 0);
-}
-
-async function getFullEvent(eventId) {
+async function fullEvent(id) {
   return prisma.rpEvent.findUnique({
-    where: { id: eventId },
-    include: {
-      options: {
-        orderBy: { id: "asc" },
-        include: { bets: true },
-      },
-    },
+    where: { id },
+    include: { options: { orderBy: { id: "asc" }, include: { bets: true } } },
   });
 }
 
-function buildMainPanel() {
-  const embed = createBaseEmbed(LS_THEME.green)
+function mainPanel() {
+  const e = embed(LS_THEME.green)
     .setTitle("💚 LS Bet — Главное меню")
-    .setDescription(
-      [
-        "```",
-        "LS BET PLATFORM",
-        "EVENTS • LIVE BETS • COINFLIP • PROMO",
-        "```",
-        "**Добро пожаловать в LS Bet.**",
-        "",
-        "Здесь ты можешь участвовать в RP-событиях, делать ставки, играть в Coinflip, активировать промокоды, пополнять и выводить баланс.",
-        "",
-        LS_TEXT.line,
-      ].join("\n")
-    )
-    .addFields(
-      {
-        name: "🎰 RP-события",
-        value: "Афиши, коэффициенты, LIVE-ставки и результаты.",
-        inline: true,
-      },
-      {
-        name: "🪙 Coinflip",
-        value: "Быстрая дуэль между двумя игроками.",
-        inline: true,
-      },
-      {
-        name: "💰 Баланс",
-        value: "Пополнение, вывод, история операций и профиль.",
-        inline: true,
-      }
-    );
+    .setDescription([
+      "```",
+      "LS BET PLATFORM",
+      "RP EVENTS • COINFLIP • LOTTERY • PROMO",
+      "```",
+      "RP-события, ставки, Coinflip, лотерея 5 чисел, промокоды, пополнение и вывод баланса.",
+      "",
+      LS_TEXT.line,
+    ].join("\n"));
 
-  const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("panel_profile")
-      .setLabel("👤 Профиль")
-      .setStyle(ButtonStyle.Success),
-
-    new ButtonBuilder()
-      .setCustomId("panel_events")
-      .setLabel("🎰 RP-события")
-      .setStyle(ButtonStyle.Primary),
-
-    new ButtonBuilder()
-      .setCustomId("panel_mybets")
-      .setLabel("🧾 Мои ставки")
-      .setStyle(ButtonStyle.Secondary)
+  const r1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("panel_profile").setLabel("👤 Профиль").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId("panel_events").setLabel("🎰 RP-события").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("panel_mybets").setLabel("🧾 Мои ставки").setStyle(ButtonStyle.Secondary)
   );
 
-  const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("panel_coinflip")
-      .setLabel("🪙 Coinflip")
-      .setStyle(ButtonStyle.Primary),
-
-    new ButtonBuilder()
-      .setCustomId("panel_promo")
-      .setLabel("🎟️ Промокод")
-      .setStyle(ButtonStyle.Secondary),
-
-    new ButtonBuilder()
-      .setCustomId("panel_top")
-      .setLabel("🏆 Top")
-      .setStyle(ButtonStyle.Secondary),
-
-    new ButtonBuilder()
-      .setCustomId("panel_history")
-      .setLabel("📜 История")
-      .setStyle(ButtonStyle.Secondary)
+  const r2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("panel_coinflip").setLabel("🪙 Coinflip").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("panel_lottery").setLabel("🎫 Лотерея").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId("panel_promo").setLabel("🎟️ Промокод").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("panel_top").setLabel("🏆 Top").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("panel_history").setLabel("📜 История").setStyle(ButtonStyle.Secondary)
   );
 
-  const row3 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("panel_topup")
-      .setLabel("💰 Пополнить")
-      .setStyle(ButtonStyle.Success),
-
-    new ButtonBuilder()
-      .setCustomId("panel_withdraw")
-      .setLabel("💸 Вывести")
-      .setStyle(ButtonStyle.Danger)
+  const r3 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("panel_topup").setLabel("💰 Пополнить").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId("panel_withdraw").setLabel("💸 Вывести").setStyle(ButtonStyle.Danger)
   );
 
-  return {
-    embeds: [embed],
-    components: [row1, row2, row3],
-  };
+  return { embeds: [e], components: [r1, r2, r3] };
 }
 
-function buildAdminPanel() {
-  const embed = createBaseEmbed(LS_THEME.gold)
+function adminPanel() {
+  const e = embed(LS_THEME.gold)
     .setTitle("🛠️ LS Bet — Admin Panel")
-    .setDescription(
-      [
-        "```",
-        "ADMIN CONTROL CENTER",
-        "EVENTS • TOPUPS • WITHDRAWS • PROMOS",
-        "```",
-        "**Панель управления LS Bet.**",
-        "",
-        LS_TEXT.line,
-      ].join("\n")
-    )
-    .addFields(
-      {
-        name: "📢 События",
-        value: "LIVE, завершение, обновление афиш.",
-        inline: true,
-      },
-      {
-        name: "💰 Заявки",
-        value: "Проверка пополнений и выводов.",
-        inline: true,
-      },
-      {
-        name: "🎟️ Промокоды",
-        value: "Обычные и реферальные промокоды.",
-        inline: true,
-      }
-    );
+    .setDescription(["```", "ADMIN CONTROL CENTER", "EVENTS • TOPUPS • WITHDRAWS • PROMOS • LOTTERY", "```", LS_TEXT.line].join("\n"));
 
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("admin_events")
-      .setLabel("📢 События")
-      .setStyle(ButtonStyle.Primary),
-
-    new ButtonBuilder()
-      .setCustomId("admin_topups")
-      .setLabel("💰 Заявки")
-      .setStyle(ButtonStyle.Secondary),
-
-    new ButtonBuilder()
-      .setCustomId("admin_withdraws")
-      .setLabel("💸 Выводы")
-      .setStyle(ButtonStyle.Danger),
-
-    new ButtonBuilder()
-      .setCustomId("admin_promos")
-      .setLabel("🎟️ Промокоды")
-      .setStyle(ButtonStyle.Secondary),
-
-    new ButtonBuilder()
-      .setCustomId("admin_public_panel")
-      .setLabel("📌 Меню")
-      .setStyle(ButtonStyle.Success)
+  const r1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("admin_events").setLabel("📢 События").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("admin_topups").setLabel("💰 Заявки").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("admin_withdraws").setLabel("💸 Выводы").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId("admin_promos").setLabel("🎟️ Промокоды").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("admin_public_panel").setLabel("📌 Меню").setStyle(ButtonStyle.Success)
   );
 
-  return {
-    embeds: [embed],
-    components: [row],
-    ephemeral: true,
-  };
+  const r2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("admin_lottery").setLabel("🎫 Лотерея").setStyle(ButtonStyle.Success)
+  );
+
+  return { embeds: [e], components: [r1, r2], ephemeral: true };
 }
 
-function buildEventPoster(event) {
-  const closesUnix = getUnixTime(event.closesAt);
-  const eventBank = getEventBank(event);
-  const isClosed = event.status !== "OPEN" || isEventClosed(event);
+function eventEmbeds(event) {
+  const closed = event.status !== "OPEN" || isEventClosed(event);
+  const color = event.status === "OPEN" ? LS_THEME.green : event.status === "LIVE" ? LS_THEME.red : LS_THEME.gold;
 
-  const statusText = getStatusName(
-    isClosed && event.status === "OPEN" ? "LIVE" : event.status
-  );
-
-  const mainEmbed = createBaseEmbed(
-    event.status === "OPEN"
-      ? LS_THEME.green
-      : event.status === "LIVE"
-      ? LS_THEME.red
-      : LS_THEME.gold
-  )
+  const main = embed(color)
     .setTitle(`🎰 LS BET EVENT #${event.id}`)
-    .setDescription(
-      [
-        `# ${event.title}`,
-        "",
-        event.description || "Описание события не указано.",
-        "",
-        LS_TEXT.line,
-        `**Статус:** ${statusText}`,
-        `**Закрытие ставок:** <t:${closesUnix}:R>`,
-        `**Точное время:** <t:${closesUnix}:f>`,
-        `**Банк события:** ${formatMoney(eventBank)}`,
-        LS_TEXT.line,
-      ].join("\n")
-    );
+    .setDescription([
+      `# ${event.title}`,
+      "",
+      event.description || "Описание не указано.",
+      "",
+      LS_TEXT.line,
+      `**Статус:** ${statusEvent(closed && event.status === "OPEN" ? "LIVE" : event.status)}`,
+      `**Закрытие ставок:** <t:${unix(event.closesAt)}:R>`,
+      `**Банк события:** ${money(eventBank(event))}`,
+      LS_TEXT.line,
+    ].join("\n"));
 
-  const optionEmbeds = event.options.map((option, index) => {
-    const optionBank = getOptionBetTotal(option);
-
-    const embed = createBaseEmbed(index === 0 ? LS_THEME.green : LS_THEME.gold)
-      .setTitle(`${index === 0 ? "1️⃣" : "2️⃣"} ${option.title}`)
-      .setDescription(
-        [
-          `**Коэффициент:** x${option.odds}`,
-          `**Поставлено:** ${formatMoney(optionBank)}`,
-        ].join("\n")
-      );
-
-    if (option.imageUrl) embed.setImage(option.imageUrl);
-
-    return embed;
+  const options = event.options.map((o, i) => {
+    const e = embed(i === 0 ? LS_THEME.green : LS_THEME.gold)
+      .setTitle(`${i === 0 ? "1️⃣" : "2️⃣"} ${o.title}`)
+      .setDescription(`**Коэффициент:** x${o.odds}\n**Поставлено:** ${money(optionTotal(o))}`);
+    if (o.imageUrl) e.setImage(o.imageUrl);
+    return e;
   });
 
-  return [mainEmbed, ...optionEmbeds];
+  return [main, ...options];
 }
 
-function buildEventButtons(event) {
+function eventButtons(event) {
   const disabled = event.status !== "OPEN" || isEventClosed(event);
-  const betRow = new ActionRowBuilder();
+  const row = new ActionRowBuilder();
 
   for (const option of event.options.slice(0, 2)) {
-    betRow.addComponents(
+    row.addComponents(
       new ButtonBuilder()
         .setCustomId(`bet:${event.id}:${option.id}`)
         .setLabel(`💵 Поставить на ${option.title}`)
@@ -463,568 +266,251 @@ function buildEventButtons(event) {
     );
   }
 
-  const infoRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`event_stats:${event.id}`)
-      .setLabel("📊 Статистика")
-      .setStyle(ButtonStyle.Secondary),
-
-    new ButtonBuilder()
-      .setCustomId("panel_profile")
-      .setLabel("👤 Профиль")
-      .setStyle(ButtonStyle.Secondary),
-
-    new ButtonBuilder()
-      .setCustomId("panel_top")
-      .setLabel("🏆 Top Winners")
-      .setStyle(ButtonStyle.Secondary)
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`event_stats:${event.id}`).setLabel("📊 Статистика").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("panel_profile").setLabel("👤 Профиль").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("panel_top").setLabel("🏆 Top").setStyle(ButtonStyle.Secondary)
   );
 
-  return [betRow, infoRow];
-}
-
-function buildCloseTicketRow(requestId) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`ticket_close:${requestId}`)
-      .setLabel("🔒 Закрыть тикет")
-      .setStyle(ButtonStyle.Secondary)
-  );
-}
-
-function buildCloseWithdrawTicketRow(requestId) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`withdraw_ticket_close:${requestId}`)
-      .setLabel("🔒 Закрыть тикет")
-      .setStyle(ButtonStyle.Secondary)
-  );
+  return [row, row2];
 }
 
 async function updateEventMessage(eventId) {
-  const event = await getFullEvent(eventId);
-  if (!event || !event.messageId || !event.channelId) return;
-
+  const event = await fullEvent(eventId);
+  if (!event?.messageId || !event?.channelId) return;
   try {
     const channel = await client.channels.fetch(event.channelId);
-    const message = await channel.messages.fetch(event.messageId);
-
-    await message.edit({
-      content: "📢 **LS Bet афиша события**",
-      embeds: buildEventPoster(event),
-      components: buildEventButtons(event),
-    });
-  } catch (error) {
-    console.error("Не смог обновить афишу:", error.message);
+    const msg = await channel.messages.fetch(event.messageId);
+    await msg.edit({ content: "📢 **LS Bet афиша события**", embeds: eventEmbeds(event), components: eventButtons(event) });
+  } catch (e) {
+    console.error("updateEventMessage:", e.message);
   }
 }
 
 async function closeExpiredEvents() {
-  const expiredEvents = await prisma.rpEvent.findMany({
-    where: {
-      status: "OPEN",
-      closesAt: {
-        lte: new Date(),
-      },
-    },
-  });
-
-  for (const event of expiredEvents) {
-    await prisma.rpEvent.update({
-      where: {
-        id: event.id,
-      },
-      data: {
-        status: "LIVE",
-      },
-    });
-
+  const events = await prisma.rpEvent.findMany({ where: { status: "OPEN", closesAt: { lte: new Date() } } });
+  for (const event of events) {
+    await prisma.rpEvent.update({ where: { id: event.id }, data: { status: "LIVE" } });
     await updateEventMessage(event.id);
-
-    await sendLog(
-      "EVENT_AUTO_LIVE",
-      "🔴 Событие автоматически переведено в LIVE",
-      `Событие **#${event.id} ${event.title}** автоматически закрыто по таймеру.`
-    );
+    await log("EVENT_AUTO_LIVE", "🔴 Событие автоматически переведено в LIVE", `Событие **#${event.id} ${event.title}** закрыто по таймеру.`);
   }
 }
 
-async function publishRpEventResult(event, winnerOption, winnersCount, totalPaid) {
+async function publishEventResult(event, winnerOption, winnersCount, totalPaid) {
   try {
-    const resultChannel = await client.channels.fetch(RESULT_CHANNEL_ID);
-
-    if (!resultChannel || !resultChannel.isTextBased()) {
-      console.error("Канал результатов RP-событий не найден.");
-      return;
-    }
-
-    const embed = createBaseEmbed(LS_THEME.gold)
+    const channel = await client.channels.fetch(RESULT_CHANNEL_ID);
+    if (!channel?.isTextBased()) return;
+    const e = embed(LS_THEME.gold)
       .setTitle("🏁 LS BET RESULT")
-      .setDescription(
-        [
-          "```",
-          "EVENT FINISHED",
-          "```",
-          `# ${event.title}`,
-          "",
-          LS_TEXT.line,
-          `**ID события:** #${event.id}`,
-          `**Победный исход:** ${winnerOption.title}`,
-          `**Победителей:** ${winnersCount}`,
-          `**Выплачено:** ${formatMoney(totalPaid)}`,
-          LS_TEXT.line,
-          "",
-          "Спасибо за участие в LS Bet 💚",
-        ].join("\n")
-      );
-
-    if (winnerOption.imageUrl) embed.setImage(winnerOption.imageUrl);
-
-    await resultChannel.send({
-      content: "🏁 **Итоги RP-события**",
-      embeds: [embed],
-    });
-  } catch (error) {
-    console.error("Не смог опубликовать результат:", error.message);
+      .setDescription([
+        "```",
+        "RP EVENT FINISHED",
+        "```",
+        `# ${event.title}`,
+        "",
+        `**ID события:** #${event.id}`,
+        `**Победный исход:** ${winnerOption.title}`,
+        `**Победителей:** ${winnersCount}`,
+        `**Выплачено:** ${money(totalPaid)}`,
+      ].join("\n"));
+    if (winnerOption.imageUrl) e.setImage(winnerOption.imageUrl);
+    await channel.send({ content: "🏁 **Итоги RP-события**", embeds: [e] });
+  } catch (e) {
+    console.error("publishEventResult:", e.message);
   }
 }
-
 async function showProfile(interaction) {
-  const user = await getOrCreateUser(interaction.user);
+  const user = await userOf(interaction.user);
 
-  const totalBets = await prisma.bet.count({
-    where: { userId: user.id },
-  });
+  const [totalBets, activeBets, wonBets, lostBets, coinflipWins, referralsCount, referralEarned, lotteryTickets] =
+    await Promise.all([
+      prisma.bet.count({ where: { userId: user.id } }),
+      prisma.bet.count({ where: { userId: user.id, status: "ACTIVE" } }),
+      prisma.bet.count({ where: { userId: user.id, status: "WON" } }),
+      prisma.bet.count({ where: { userId: user.id, status: "LOST" } }),
+      prisma.coinflipGame.count({ where: { winnerUserId: user.id } }),
+      prisma.user.count({ where: { referredByUserId: user.id } }),
+      prisma.referralReward.aggregate({ where: { referrerId: user.id }, _sum: { amount: true } }),
+      prisma.lotteryTicket.count({ where: { userId: user.id } }),
+    ]);
 
-  const activeBets = await prisma.bet.count({
-    where: {
-      userId: user.id,
-      status: "ACTIVE",
-    },
-  });
+  const winPercent = wonBets + lostBets > 0 ? ((wonBets / (wonBets + lostBets)) * 100).toFixed(1) : "0.0";
 
-  const wonBets = await prisma.bet.count({
-    where: {
-      userId: user.id,
-      status: "WON",
-    },
-  });
-
-  const lostBets = await prisma.bet.count({
-    where: {
-      userId: user.id,
-      status: "LOST",
-    },
-  });
-
-  const coinflipWins = await prisma.coinflipGame.count({
-    where: {
-      winnerUserId: user.id,
-    },
-  });
-
-  const referralsCount = await prisma.user.count({
-    where: {
-      referredByUserId: user.id,
-    },
-  });
-
-  const referralEarned = await prisma.referralReward.aggregate({
-    where: {
-      referrerId: user.id,
-    },
-    _sum: {
-      amount: true,
-    },
-  });
-
-  const winPercent =
-    wonBets + lostBets > 0
-      ? ((wonBets / (wonBets + lostBets)) * 100).toFixed(1)
-      : "0.0";
-
-  const embed = createBaseEmbed(LS_THEME.green)
+  const e = embed(LS_THEME.green)
     .setTitle("👤 LS Bet — Профиль игрока")
     .setThumbnail(interaction.user.displayAvatarURL())
-    .setDescription(
-      [
-        "```",
-        "PLAYER PROFILE",
-        "```",
-        `Игрок: <@${interaction.user.id}>`,
-        LS_TEXT.line,
-      ].join("\n")
-    )
+    .setDescription(["```", "PLAYER PROFILE", "```", `Игрок: <@${interaction.user.id}>`, LS_TEXT.line].join("\n"))
     .addFields(
-      {
-        name: "Баланс",
-        value: formatMoney(user.balance),
-        inline: true,
-      },
-      {
-        name: "Всего ставок",
-        value: String(totalBets),
-        inline: true,
-      },
-      {
-        name: "Активные ставки",
-        value: String(activeBets),
-        inline: true,
-      },
-      {
-        name: "Выиграно ставок",
-        value: String(wonBets),
-        inline: true,
-      },
-      {
-        name: "Coinflip побед",
-        value: String(coinflipWins),
-        inline: true,
-      },
-      {
-        name: "Процент побед",
-        value: `${winPercent}%`,
-        inline: true,
-      },
-      {
-        name: "Рефералов",
-        value: String(referralsCount),
-        inline: true,
-      },
-      {
-        name: "Заработано с рефералов",
-        value: formatMoney(referralEarned._sum.amount || 0),
-        inline: true,
-      }
+      { name: "Баланс", value: money(user.balance), inline: true },
+      { name: "Всего ставок", value: String(totalBets), inline: true },
+      { name: "Активные ставки", value: String(activeBets), inline: true },
+      { name: "Выиграно ставок", value: String(wonBets), inline: true },
+      { name: "Процент побед", value: `${winPercent}%`, inline: true },
+      { name: "Coinflip побед", value: String(coinflipWins), inline: true },
+      { name: "Билетов лотереи", value: String(lotteryTickets), inline: true },
+      { name: "Рефералов", value: String(referralsCount), inline: true },
+      { name: "С рефералов", value: money(referralEarned._sum.amount || 0), inline: true }
     );
 
-  return interaction.reply({
-    embeds: [embed],
-    ephemeral: true,
-  });
+  return interaction.reply({ embeds: [e], ephemeral: true });
 }
 
 async function showHistory(interaction) {
-  const user = await getOrCreateUser(interaction.user);
+  const user = await userOf(interaction.user);
 
   const transactions = await prisma.transaction.findMany({
-    where: {
-      userId: user.id,
-    },
-    orderBy: {
-      id: "desc",
-    },
-    take: 8,
+    where: { userId: user.id },
+    orderBy: { id: "desc" },
+    take: 10,
   });
 
-  const topUps = await prisma.topUpRequest.findMany({
-    where: {
-      userId: user.id,
-    },
-    orderBy: {
-      id: "desc",
-    },
-    take: 5,
-  });
-
-  const withdraws = await prisma.withdrawRequest.findMany({
-    where: {
-      userId: user.id,
-    },
-    orderBy: {
-      id: "desc",
-    },
-    take: 5,
-  });
-
-  const transactionText =
-    transactions.length === 0
-      ? "Операций пока нет."
-      : transactions
-          .map((transaction) => {
-            const sign = transaction.amount > 0 ? "+" : "";
-            return [
-              `**#${transaction.id} — ${transactionTypeName(transaction.type)}**`,
-              `Сумма: ${sign}${formatMoney(transaction.amount)}`,
-              `Комментарий: ${transaction.comment || "Без комментария"}`,
-              `Дата: <t:${getUnixTime(transaction.createdAt)}:R>`,
-            ].join("\n");
-          })
-          .join("\n\n");
-
-  const topUpText =
-    topUps.length === 0
-      ? "Заявок на пополнение пока нет."
-      : topUps
-          .map((request) => {
-            return [
-              `**#${request.id} — ${getTopUpStatusName(request.status)}**`,
-              `Логин: ${request.login}`,
-              `Сумма: ${formatMoney(request.amount)}`,
-              `Дата: <t:${getUnixTime(request.createdAt)}:R>`,
-            ].join("\n");
-          })
-          .join("\n\n");
-
-  const withdrawText =
-    withdraws.length === 0
-      ? "Заявок на вывод пока нет."
-      : withdraws
-          .map((request) => {
-            return [
-              `**#${request.id} — ${getWithdrawStatusName(request.status)}**`,
-              `Сумма вывода: ${formatMoney(request.amount)}`,
-              `Комиссия: ${formatMoney(request.commission)}`,
-              `К получению: ${formatMoney(request.payoutAmount)}`,
-              `Дата: <t:${getUnixTime(request.createdAt)}:R>`,
-            ].join("\n");
-          })
-          .join("\n\n");
-
-  const transactionsEmbed = createBaseEmbed(LS_THEME.green)
-    .setTitle("📜 История операций")
-    .setDescription(transactionText);
-
-  const topUpsEmbed = createBaseEmbed(LS_THEME.gold)
-    .setTitle("💰 История пополнений")
-    .setDescription(topUpText);
-
-  const withdrawEmbed = createBaseEmbed(LS_THEME.red)
-    .setTitle("💸 История выводов")
-    .setDescription(withdrawText);
+  const text = transactions.length
+    ? transactions
+        .map((t) => {
+          const sign = t.amount > 0 ? "+" : "";
+          return `**#${t.id} — ${txName(t.type)}**\nСумма: ${sign}${money(t.amount)}\nКомментарий: ${
+            t.comment || "Без комментария"
+          }\nДата: <t:${unix(t.createdAt)}:R>`;
+        })
+        .join("\n\n")
+    : "Операций пока нет.";
 
   return interaction.reply({
-    embeds: [transactionsEmbed, topUpsEmbed, withdrawEmbed],
+    embeds: [embed(LS_THEME.green).setTitle("📜 История операций").setDescription(text.slice(0, 4000))],
     ephemeral: true,
   });
 }
 
 async function showTop(interaction) {
-  const users = await prisma.user.findMany({
-    orderBy: {
-      balance: "desc",
-    },
-    take: 10,
-  });
+  const users = await prisma.user.findMany({ orderBy: { balance: "desc" }, take: 10 });
 
-  if (users.length === 0) {
-    return interaction.reply({
-      content: "Рейтинг пока пуст.",
-      ephemeral: true,
-    });
+  if (!users.length) {
+    return interaction.reply({ content: "Рейтинг пока пуст.", ephemeral: true });
   }
 
   const medals = ["🥇", "🥈", "🥉"];
-
   const text = users
-    .map((user, index) => {
-      const medal = medals[index] || `#${index + 1}`;
-      return `${medal} <@${user.discordId}> — **${formatMoney(user.balance)}**`;
-    })
+    .map((u, i) => `${medals[i] || `#${i + 1}`} <@${u.discordId}> — **${money(u.balance)}**`)
     .join("\n");
 
-  const embed = createBaseEmbed(LS_THEME.gold)
-    .setTitle("🏆 LS Bet Top Winners")
-    .setDescription(["```", "LEADERBOARD", "```", text].join("\n"));
-
   return interaction.reply({
-    embeds: [embed],
+    embeds: [embed(LS_THEME.gold).setTitle("🏆 LS Bet Top").setDescription(["```", "LEADERBOARD", "```", text].join("\n"))],
     ephemeral: true,
   });
 }
 
 async function showMyBets(interaction) {
-  const user = await getOrCreateUser(interaction.user);
+  const user = await userOf(interaction.user);
 
   const bets = await prisma.bet.findMany({
-    where: {
-      userId: user.id,
-    },
-    orderBy: {
-      id: "desc",
-    },
+    where: { userId: user.id },
+    orderBy: { id: "desc" },
     take: 10,
-    include: {
-      event: true,
-      option: true,
-    },
+    include: { event: true, option: true },
   });
 
-  if (bets.length === 0) {
-    return interaction.reply({
-      content: "У тебя пока нет ставок.",
-      ephemeral: true,
-    });
+  if (!bets.length) {
+    return interaction.reply({ content: "У тебя пока нет ставок.", ephemeral: true });
   }
 
   const text = bets
-    .map((bet) => {
-      return [
-        `**#${bet.id} — ${bet.event.title}**`,
-        `Исход: ${bet.option.title}`,
-        `Сумма: ${formatMoney(bet.amount)}`,
-        `Возможный выигрыш: ${formatMoney(bet.potentialWin)}`,
-        `Статус: ${getBetStatusName(bet.status)}`,
-      ].join("\n");
+    .map((b) => {
+      const status = b.status === "ACTIVE" ? "🟢 Активна" : b.status === "WON" ? "✅ Выиграла" : "❌ Проиграла";
+      return `**#${b.id} — ${b.event.title}**\nИсход: ${b.option.title}\nСумма: ${money(
+        b.amount
+      )}\nВозможный выигрыш: ${money(b.potentialWin)}\nСтатус: ${status}`;
     })
     .join("\n\n");
 
-  const embed = createBaseEmbed(LS_THEME.green)
-    .setTitle("🧾 Мои ставки")
-    .setDescription(text);
-
   return interaction.reply({
-    embeds: [embed],
+    embeds: [embed(LS_THEME.green).setTitle("🧾 Мои ставки").setDescription(text.slice(0, 4000))],
     ephemeral: true,
   });
 }
 
 async function showEvents(interaction) {
   await closeExpiredEvents();
-  await getOrCreateUser(interaction.user);
+  await userOf(interaction.user);
 
   const events = await prisma.rpEvent.findMany({
-    where: {
-      status: {
-        in: ["OPEN", "LIVE"],
-      },
-    },
-    orderBy: {
-      id: "desc",
-    },
+    where: { status: { in: ["OPEN", "LIVE"] } },
+    orderBy: { id: "desc" },
     take: 3,
-    include: {
-      options: {
-        orderBy: {
-          id: "asc",
-        },
-        include: {
-          bets: true,
-        },
-      },
-    },
+    include: { options: { orderBy: { id: "asc" }, include: { bets: true } } },
   });
 
-  if (events.length === 0) {
-    return interaction.reply({
-      content: "Сейчас нет активных событий LS Bet.",
-      ephemeral: true,
-    });
+  if (!events.length) {
+    return interaction.reply({ content: "Сейчас нет активных событий LS Bet.", ephemeral: true });
   }
 
   const embeds = [];
   const components = [];
 
   for (const event of events) {
-    embeds.push(buildEventPoster(event)[0]);
-    components.push(buildEventButtons(event)[0]);
+    embeds.push(eventEmbeds(event)[0]);
+    components.push(eventButtons(event)[0]);
   }
 
-  return interaction.reply({
-    embeds,
-    components,
-    ephemeral: true,
-  });
+  return interaction.reply({ embeds, components, ephemeral: true });
 }
 
-function buildTopUpModal() {
-  const modal = new ModalBuilder()
-    .setCustomId("topup_modal")
-    .setTitle("LS Bet — пополнение баланса");
-
-  const loginInput = new TextInputBuilder()
-    .setCustomId("login")
-    .setLabel("Логин / ник на сервере")
-    .setPlaceholder("Например: NICK")
-    .setRequired(true)
-    .setStyle(TextInputStyle.Short);
-
-  const amountInput = new TextInputBuilder()
-    .setCustomId("amount")
-    .setLabel("Сумма пополнения в $")
-    .setPlaceholder("Например: 5000")
-    .setRequired(true)
-    .setStyle(TextInputStyle.Short);
-
-  const commentInput = new TextInputBuilder()
-    .setCustomId("comment")
-    .setLabel("Комментарий")
-    .setPlaceholder("После создания тикета приложи скриншот перевода.")
-    .setRequired(false)
-    .setStyle(TextInputStyle.Paragraph);
+function topupModal() {
+  const modal = new ModalBuilder().setCustomId("topup_modal").setTitle("LS Bet — пополнение");
 
   modal.addComponents(
-    new ActionRowBuilder().addComponents(loginInput),
-    new ActionRowBuilder().addComponents(amountInput),
-    new ActionRowBuilder().addComponents(commentInput)
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId("login").setLabel("Логин / ник").setRequired(true).setStyle(TextInputStyle.Short)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId("amount").setLabel("Сумма пополнения в $").setRequired(true).setStyle(TextInputStyle.Short)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId("comment").setLabel("Комментарий").setRequired(false).setStyle(TextInputStyle.Paragraph)
+    )
   );
 
   return modal;
 }
 
-function buildWithdrawModal() {
-  const modal = new ModalBuilder()
-    .setCustomId("withdraw_modal")
-    .setTitle("LS Bet — вывод средств");
-
-  const loginInput = new TextInputBuilder()
-    .setCustomId("login")
-    .setLabel("Логин / ник на сервере")
-    .setPlaceholder("Например: NICK")
-    .setRequired(true)
-    .setStyle(TextInputStyle.Short);
-
-  const amountInput = new TextInputBuilder()
-    .setCustomId("amount")
-    .setLabel("Сумма вывода в $")
-    .setPlaceholder("Например: 5000")
-    .setRequired(true)
-    .setStyle(TextInputStyle.Short);
-
-  const detailsInput = new TextInputBuilder()
-    .setCustomId("details")
-    .setLabel("Реквизиты / способ получения")
-    .setPlaceholder("Куда отправить выплату")
-    .setRequired(true)
-    .setStyle(TextInputStyle.Paragraph);
-
-  const commentInput = new TextInputBuilder()
-    .setCustomId("comment")
-    .setLabel("Комментарий")
-    .setPlaceholder("Можно оставить пустым")
-    .setRequired(false)
-    .setStyle(TextInputStyle.Paragraph);
+function withdrawModal() {
+  const modal = new ModalBuilder().setCustomId("withdraw_modal").setTitle("LS Bet — вывод средств");
 
   modal.addComponents(
-    new ActionRowBuilder().addComponents(loginInput),
-    new ActionRowBuilder().addComponents(amountInput),
-    new ActionRowBuilder().addComponents(detailsInput),
-    new ActionRowBuilder().addComponents(commentInput)
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId("login").setLabel("Логин / ник").setRequired(true).setStyle(TextInputStyle.Short)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId("amount").setLabel("Сумма вывода в $").setRequired(true).setStyle(TextInputStyle.Short)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId("details").setLabel("Реквизиты / способ получения").setRequired(true).setStyle(TextInputStyle.Paragraph)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId("comment").setLabel("Комментарий").setRequired(false).setStyle(TextInputStyle.Paragraph)
+    )
   );
 
   return modal;
 }
 
-async function createTopUpTicket(interaction, login, amount, comment) {
-  const user = await getOrCreateUser(interaction.user);
+function closeTicketRow(id) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`ticket_close:${id}`).setLabel("🔒 Закрыть тикет").setStyle(ButtonStyle.Secondary)
+  );
+}
+
+function closeWithdrawTicketRow(id) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`withdraw_ticket_close:${id}`).setLabel("🔒 Закрыть тикет").setStyle(ButtonStyle.Secondary)
+  );
+}
+
+async function createTicketChannel(interaction, prefix, requestId) {
   const guild = interaction.guild;
-  const modRoleId = getModRoleId();
-
-  const request = await prisma.topUpRequest.create({
-    data: {
-      userId: user.id,
-      login,
-      amount,
-      comment: comment || null,
-      status: "WAITING_SCREENSHOT",
-    },
-  });
+  const modRoleId = process.env.MOD_ROLE_ID || process.env.ADMIN_ROLE_ID || null;
 
   const permissionOverwrites = [
-    {
-      id: guild.id,
-      deny: [PermissionFlagsBits.ViewChannel],
-    },
+    { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
     {
       id: interaction.user.id,
       allow: [
@@ -1059,138 +545,83 @@ async function createTopUpTicket(interaction, login, amount, comment) {
     });
   }
 
-  const safeUsername = interaction.user.username
-    .toLowerCase()
-    .replace(/[^a-z0-9а-яё-]/gi, "-")
-    .slice(0, 40);
+  const safeName = interaction.user.username.toLowerCase().replace(/[^a-z0-9а-яё-]/gi, "-").slice(0, 40);
 
-  const channelOptions = {
-    name: `topup-${request.id}-${safeUsername}`,
+  const options = {
+    name: `${prefix}-${requestId}-${safeName}`,
     type: ChannelType.GuildText,
     permissionOverwrites,
   };
 
-  if (process.env.TOPUP_CATEGORY_ID) {
-    channelOptions.parent = process.env.TOPUP_CATEGORY_ID;
+  if (prefix === "withdraw" && process.env.WITHDRAW_CATEGORY_ID) {
+    options.parent = process.env.WITHDRAW_CATEGORY_ID;
+  } else if (process.env.TOPUP_CATEGORY_ID) {
+    options.parent = process.env.TOPUP_CATEGORY_ID;
   }
 
-  const ticketChannel = await guild.channels.create(channelOptions);
+  return guild.channels.create(options);
+}
+
+async function createTopUpTicket(interaction, login, amount, comment) {
+  const user = await userOf(interaction.user);
+
+  const request = await prisma.topUpRequest.create({
+    data: {
+      userId: user.id,
+      login,
+      amount,
+      comment: comment || null,
+      status: "WAITING_SCREENSHOT",
+    },
+  });
+
+  const channel = await createTicketChannel(interaction, "topup", request.id);
 
   await prisma.topUpRequest.update({
-    where: {
-      id: request.id,
-    },
-    data: {
-      ticketChannelId: ticketChannel.id,
-    },
+    where: { id: request.id },
+    data: { ticketChannelId: channel.id },
   });
 
-  const embed = createBaseEmbed(LS_THEME.green)
+  const e = embed(LS_THEME.green)
     .setTitle(`💰 Заявка на пополнение #${request.id}`)
-    .setDescription(
-      [
-        `<@${interaction.user.id}>, заявка создана.`,
-        "",
-        "**Теперь отправь в этот канал скриншот перевода.**",
-        "",
-        "После загрузки скриншота заявка уйдёт модераторам на проверку.",
-      ].join("\n")
-    )
+    .setDescription(`<@${interaction.user.id}>, заявка создана.\n\n**Отправь в этот канал скриншот перевода.**`)
     .addFields(
-      {
-        name: "Логин",
-        value: login,
-        inline: true,
-      },
-      {
-        name: "Сумма",
-        value: formatMoney(amount),
-        inline: true,
-      },
-      {
-        name: "Комментарий",
-        value: comment || "Не указан",
-        inline: false,
-      }
+      { name: "Логин", value: login, inline: true },
+      { name: "Сумма", value: money(amount), inline: true },
+      { name: "Комментарий", value: comment || "Не указан", inline: false }
     );
 
-  await ticketChannel.send({
-    content: `<@${interaction.user.id}>`,
-    embeds: [embed],
-  });
+  await channel.send({ content: `<@${interaction.user.id}>`, embeds: [e] });
 
-  await sendLog(
-    "TOPUP_CREATED",
-    "💰 Создана заявка на пополнение",
-    `Игрок <@${interaction.user.id}> создал заявку #${request.id}.`,
-    [
-      {
-        name: "Логин",
-        value: login,
-        inline: true,
-      },
-      {
-        name: "Сумма",
-        value: formatMoney(amount),
-        inline: true,
-      },
-      {
-        name: "Ticket",
-        value: `<#${ticketChannel.id}>`,
-        inline: true,
-      },
-    ]
-  );
+  await log("TOPUP_CREATED", "💰 Создана заявка на пополнение", `Игрок <@${interaction.user.id}> создал заявку #${request.id}.`, [
+    { name: "Сумма", value: money(amount), inline: true },
+    { name: "Ticket", value: `<#${channel.id}>`, inline: true },
+  ]);
 
   return interaction.reply({
-    content: `✅ Заявка создана: <#${ticketChannel.id}>. Загрузи туда скриншот перевода.`,
+    content: `✅ Заявка создана: <#${channel.id}>. Загрузи туда скриншот перевода.`,
     ephemeral: true,
   });
 }
 
 async function createWithdrawTicket(interaction, login, amount, details, comment) {
-  const user = await getOrCreateUser(interaction.user);
+  const user = await userOf(interaction.user);
 
   if (!Number.isInteger(amount) || amount <= 0) {
-    return interaction.reply({
-      content: "Введи корректную сумму вывода.",
-      ephemeral: true,
-    });
+    return interaction.reply({ content: "Введи корректную сумму вывода.", ephemeral: true });
   }
 
   if (user.balance < amount) {
-    return interaction.reply({
-      content: `Недостаточно средств. Твой баланс: **${formatMoney(user.balance)}**.`,
-      ephemeral: true,
-    });
+    return interaction.reply({ content: `Недостаточно средств. Баланс: **${money(user.balance)}**.`, ephemeral: true });
   }
 
   const commission = Math.floor((amount * WITHDRAW_COMMISSION_PERCENT) / 100);
   const payoutAmount = amount - commission;
 
-  if (payoutAmount <= 0) {
-    return interaction.reply({
-      content: "Сумма к получению после комиссии должна быть больше 0.",
-      ephemeral: true,
-    });
-  }
-
-  const guild = interaction.guild;
-  const modRoleId = getModRoleId();
-
   const request = await prisma.$transaction(async (tx) => {
-    await tx.user.update({
-      where: {
-        id: user.id,
-      },
-      data: {
-        balance: {
-          decrement: amount,
-        },
-      },
-    });
+    await tx.user.update({ where: { id: user.id }, data: { balance: { decrement: amount } } });
 
-    const createdRequest = await tx.withdrawRequest.create({
+    const created = await tx.withdrawRequest.create({
       data: {
         userId: user.id,
         login,
@@ -1208,175 +639,58 @@ async function createWithdrawTicket(interaction, login, amount, details, comment
         userId: user.id,
         amount: -amount,
         type: "WITHDRAW_REQUEST",
-        comment: `Заявка на вывод #${createdRequest.id}. Комиссия ${WITHDRAW_COMMISSION_PERCENT}%: ${formatMoney(
-          commission
-        )}. К получению: ${formatMoney(payoutAmount)}`,
+        comment: `Заявка на вывод #${created.id}. Комиссия ${WITHDRAW_COMMISSION_PERCENT}%: ${money(commission)}. К получению: ${money(payoutAmount)}`,
       },
     });
 
-    return createdRequest;
+    return created;
   });
 
-  const permissionOverwrites = [
-    {
-      id: guild.id,
-      deny: [PermissionFlagsBits.ViewChannel],
-    },
-    {
-      id: interaction.user.id,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.AttachFiles,
-      ],
-    },
-    {
-      id: client.user.id,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.AttachFiles,
-        PermissionFlagsBits.ManageChannels,
-      ],
-    },
-  ];
-
-  if (modRoleId) {
-    permissionOverwrites.push({
-      id: modRoleId,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.AttachFiles,
-        PermissionFlagsBits.ManageChannels,
-      ],
-    });
-  }
-
-  const safeUsername = interaction.user.username
-    .toLowerCase()
-    .replace(/[^a-z0-9а-яё-]/gi, "-")
-    .slice(0, 40);
-
-  const channelOptions = {
-    name: `withdraw-${request.id}-${safeUsername}`,
-    type: ChannelType.GuildText,
-    permissionOverwrites,
-  };
-
-  if (process.env.WITHDRAW_CATEGORY_ID) {
-    channelOptions.parent = process.env.WITHDRAW_CATEGORY_ID;
-  } else if (process.env.TOPUP_CATEGORY_ID) {
-    channelOptions.parent = process.env.TOPUP_CATEGORY_ID;
-  }
-
-  const ticketChannel = await guild.channels.create(channelOptions);
+  const channel = await createTicketChannel(interaction, "withdraw", request.id);
 
   await prisma.withdrawRequest.update({
-    where: {
-      id: request.id,
-    },
-    data: {
-      ticketChannelId: ticketChannel.id,
-    },
+    where: { id: request.id },
+    data: { ticketChannelId: channel.id },
   });
 
-  const embed = createBaseEmbed(LS_THEME.red)
+  const e = embed(LS_THEME.red)
     .setTitle(`💸 Заявка на вывод #${request.id}`)
     .setDescription(
       [
-        `<@${interaction.user.id}>, заявка на вывод создана.`,
+        `<@${interaction.user.id}>, заявка создана.`,
         "",
-        `**Сумма вывода:** ${formatMoney(amount)}`,
-        `**Комиссия LS Bet ${WITHDRAW_COMMISSION_PERCENT}%:** ${formatMoney(commission)}`,
-        `**К получению:** ${formatMoney(payoutAmount)}`,
+        `**Сумма:** ${money(amount)}`,
+        `**Комиссия:** ${money(commission)}`,
+        `**К получению:** ${money(payoutAmount)}`,
         "",
-        "Сумма вывода уже списана с твоего баланса до решения администрации.",
-        "Если заявку отклонят — сумма вернётся на баланс.",
+        "Сумма списана с баланса до решения администрации.",
       ].join("\n")
     )
     .addFields(
-      {
-        name: "Логин",
-        value: login,
-        inline: true,
-      },
-      {
-        name: "Реквизиты",
-        value: details,
-        inline: false,
-      },
-      {
-        name: "Комментарий",
-        value: comment || "Не указан",
-        inline: false,
-      }
+      { name: "Логин", value: login, inline: true },
+      { name: "Реквизиты", value: details, inline: false },
+      { name: "Комментарий", value: comment || "Не указан", inline: false }
     );
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`withdraw_approve:${request.id}`)
-      .setLabel("✅ Одобрить")
-      .setStyle(ButtonStyle.Success),
-
-    new ButtonBuilder()
-      .setCustomId(`withdraw_reject:${request.id}`)
-      .setLabel("❌ Отклонить")
-      .setStyle(ButtonStyle.Danger),
-
-    new ButtonBuilder()
-      .setCustomId(`withdraw_ticket_close:${request.id}`)
-      .setLabel("🔒 Закрыть тикет")
-      .setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`withdraw_approve:${request.id}`).setLabel("✅ Одобрить").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`withdraw_reject:${request.id}`).setLabel("❌ Отклонить").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`withdraw_ticket_close:${request.id}`).setLabel("🔒 Закрыть").setStyle(ButtonStyle.Secondary)
   );
 
-  await ticketChannel.send({
-    content: `<@${interaction.user.id}>`,
-    embeds: [embed],
-    components: [row],
-  });
+  await channel.send({ content: `<@${interaction.user.id}>`, embeds: [e], components: [row] });
 
-  await sendLog(
-    "WITHDRAW_CREATED",
-    "💸 Создана заявка на вывод",
-    `Игрок <@${interaction.user.id}> создал заявку на вывод #${request.id}.`,
-    [
-      {
-        name: "Сумма вывода",
-        value: formatMoney(amount),
-        inline: true,
-      },
-      {
-        name: "Комиссия",
-        value: formatMoney(commission),
-        inline: true,
-      },
-      {
-        name: "К получению",
-        value: formatMoney(payoutAmount),
-        inline: true,
-      },
-      {
-        name: "Ticket",
-        value: `<#${ticketChannel.id}>`,
-        inline: true,
-      },
-    ]
-  );
+  await log("WITHDRAW_CREATED", "💸 Создана заявка на вывод", `Игрок <@${interaction.user.id}> создал заявку #${request.id}.`, [
+    { name: "Сумма", value: money(amount), inline: true },
+    { name: "К получению", value: money(payoutAmount), inline: true },
+    { name: "Ticket", value: `<#${channel.id}>`, inline: true },
+  ]);
 
   return interaction.reply({
-    content:
-      `✅ Заявка на вывод создана: <#${ticketChannel.id}>.\n` +
-      `Сумма: **${formatMoney(amount)}**\n` +
-      `Комиссия: **${formatMoney(commission)}**\n` +
-      `К получению: **${formatMoney(payoutAmount)}**`,
+    content: `✅ Заявка на вывод создана: <#${channel.id}>.\nК получению: **${money(payoutAmount)}**`,
     ephemeral: true,
   });
 }
-
 async function sendTopUpModerationLog(requestId) {
   const request = await prisma.topUpRequest.findUnique({
     where: {
@@ -1392,10 +706,10 @@ async function sendTopUpModerationLog(requestId) {
   const logChannelId = process.env.LOG_CHANNEL_ID;
   if (!logChannelId) return;
 
-  const channel = await client.channels.fetch(logChannelId);
-  if (!channel) return;
+  const channel = await client.channels.fetch(logChannelId).catch(() => null);
+  if (!channel?.isTextBased()) return;
 
-  const embed = createBaseEmbed(LS_THEME.gold)
+  const e = embed(LS_THEME.gold)
     .setTitle(`💰 Заявка на пополнение #${request.id}`)
     .setDescription("Игрок загрузил скриншот перевода. Требуется проверка.")
     .addFields(
@@ -1411,13 +725,8 @@ async function sendTopUpModerationLog(requestId) {
       },
       {
         name: "Сумма",
-        value: formatMoney(request.amount),
+        value: money(request.amount),
         inline: true,
-      },
-      {
-        name: "Комментарий",
-        value: request.comment || "Не указан",
-        inline: false,
       },
       {
         name: "Ticket",
@@ -1428,7 +737,7 @@ async function sendTopUpModerationLog(requestId) {
       }
     );
 
-  if (request.screenshotUrl) embed.setImage(request.screenshotUrl);
+  if (request.screenshotUrl) e.setImage(request.screenshotUrl);
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -1443,7 +752,7 @@ async function sendTopUpModerationLog(requestId) {
   );
 
   await channel.send({
-    embeds: [embed],
+    embeds: [e],
     components: [row],
   });
 }
@@ -1543,7 +852,7 @@ async function approveTopUp(interaction, requestId) {
           userId: referrer.id,
           amount: referralBonus,
           type: "REFERRAL_BONUS",
-          comment: `Реферальный бонус ${refPercent}% с пополнения <@${request.user.discordId}> на ${formatMoney(
+          comment: `Реферальный бонус ${refPercent}% с пополнения <@${request.user.discordId}> на ${money(
             request.amount
           )}`,
         },
@@ -1563,21 +872,21 @@ async function approveTopUp(interaction, requestId) {
   });
 
   if (request.ticketChannelId) {
-    try {
-      const ticketChannel = await client.channels.fetch(request.ticketChannelId);
+    const ticketChannel = await client.channels
+      .fetch(request.ticketChannelId)
+      .catch(() => null);
 
+    if (ticketChannel?.isTextBased()) {
       await ticketChannel.send({
         content:
           `✅ <@${request.user.discordId}>, заявка **#${request.id}** одобрена.\n` +
-          `На баланс начислено **${formatMoney(request.amount)}**.`,
-        components: [buildCloseTicketRow(request.id)],
+          `На баланс начислено **${money(request.amount)}**.`,
+        components: [closeTicketRow(request.id)],
       });
-    } catch (error) {
-      console.error("Не смог написать в тикет:", error.message);
     }
   }
 
-  await sendLog(
+  await log(
     "TOPUP_APPROVED",
     "✅ Пополнение одобрено",
     `Модератор <@${interaction.user.id}> одобрил заявку #${request.id}.`,
@@ -1589,12 +898,7 @@ async function approveTopUp(interaction, requestId) {
       },
       {
         name: "Сумма",
-        value: formatMoney(request.amount),
-        inline: true,
-      },
-      {
-        name: "Логин",
-        value: request.login,
+        value: money(request.amount),
         inline: true,
       },
       ...(referrer && referralBonus > 0
@@ -1605,13 +909,8 @@ async function approveTopUp(interaction, requestId) {
               inline: true,
             },
             {
-              name: "Реф. процент",
-              value: `${refPercent}%`,
-              inline: true,
-            },
-            {
               name: "Реф. бонус",
-              value: formatMoney(referralBonus),
+              value: money(referralBonus),
               inline: true,
             },
           ]
@@ -1621,9 +920,13 @@ async function approveTopUp(interaction, requestId) {
 
   return interaction.reply({
     content:
-      `✅ Заявка #${request.id} одобрена. Игроку начислено ${formatMoney(request.amount)}.` +
+      `✅ Заявка #${request.id} одобрена. Игроку начислено **${money(
+        request.amount
+      )}**.` +
       (referrer && referralBonus > 0
-        ? `\n🤝 Реферер <@${referrer.discordId}> получил ${formatMoney(referralBonus)} (${refPercent}%).`
+        ? `\n🤝 Реферер <@${referrer.discordId}> получил **${money(
+            referralBonus
+          )}**.`
         : ""),
     ephemeral: true,
   });
@@ -1648,16 +951,9 @@ async function rejectTopUp(interaction, requestId) {
     });
   }
 
-  if (request.status === "APPROVED") {
+  if (request.status === "APPROVED" || request.status === "REJECTED") {
     return interaction.reply({
-      content: "Эта заявка уже одобрена.",
-      ephemeral: true,
-    });
-  }
-
-  if (request.status === "REJECTED") {
-    return interaction.reply({
-      content: "Эта заявка уже отклонена.",
+      content: "Эта заявка уже обработана.",
       ephemeral: true,
     });
   }
@@ -1674,21 +970,21 @@ async function rejectTopUp(interaction, requestId) {
   });
 
   if (request.ticketChannelId) {
-    try {
-      const ticketChannel = await client.channels.fetch(request.ticketChannelId);
+    const ticketChannel = await client.channels
+      .fetch(request.ticketChannelId)
+      .catch(() => null);
 
+    if (ticketChannel?.isTextBased()) {
       await ticketChannel.send({
         content:
           `❌ <@${request.user.discordId}>, заявка **#${request.id}** отклонена.\n` +
           `Если это ошибка — свяжись с модератором.`,
-        components: [buildCloseTicketRow(request.id)],
+        components: [closeTicketRow(request.id)],
       });
-    } catch (error) {
-      console.error("Не смог написать в тикет:", error.message);
     }
   }
 
-  await sendLog(
+  await log(
     "TOPUP_REJECTED",
     "❌ Пополнение отклонено",
     `Модератор <@${interaction.user.id}> отклонил заявку #${request.id}.`,
@@ -1700,12 +996,7 @@ async function rejectTopUp(interaction, requestId) {
       },
       {
         name: "Сумма",
-        value: formatMoney(request.amount),
-        inline: true,
-      },
-      {
-        name: "Логин",
-        value: request.login,
+        value: money(request.amount),
         inline: true,
       },
     ]
@@ -1736,16 +1027,9 @@ async function approveWithdraw(interaction, requestId) {
     });
   }
 
-  if (request.status === "APPROVED") {
+  if (request.status !== "PENDING") {
     return interaction.reply({
-      content: "Эта заявка уже одобрена.",
-      ephemeral: true,
-    });
-  }
-
-  if (request.status === "REJECTED") {
-    return interaction.reply({
-      content: "Эта заявка уже отклонена.",
+      content: "Эта заявка уже обработана.",
       ephemeral: true,
     });
   }
@@ -1767,9 +1051,9 @@ async function approveWithdraw(interaction, requestId) {
         userId: request.userId,
         amount: 0,
         type: "WITHDRAW_APPROVED",
-        comment: `Вывод #${request.id} одобрен. Сумма: ${formatMoney(
+        comment: `Вывод #${request.id} одобрен. Сумма: ${money(
           request.amount
-        )}. Комиссия: ${formatMoney(request.commission)}. К получению: ${formatMoney(
+        )}. Комиссия: ${money(request.commission)}. К получению: ${money(
           request.payoutAmount
         )}`,
       },
@@ -1777,23 +1061,23 @@ async function approveWithdraw(interaction, requestId) {
   ]);
 
   if (request.ticketChannelId) {
-    try {
-      const ticketChannel = await client.channels.fetch(request.ticketChannelId);
+    const ticketChannel = await client.channels
+      .fetch(request.ticketChannelId)
+      .catch(() => null);
 
+    if (ticketChannel?.isTextBased()) {
       await ticketChannel.send({
         content:
           `✅ <@${request.user.discordId}>, заявка на вывод **#${request.id}** одобрена.\n` +
-          `Сумма вывода: **${formatMoney(request.amount)}**\n` +
-          `Комиссия LS Bet: **${formatMoney(request.commission)}**\n` +
-          `К получению: **${formatMoney(request.payoutAmount)}**`,
-        components: [buildCloseWithdrawTicketRow(request.id)],
+          `Сумма вывода: **${money(request.amount)}**\n` +
+          `Комиссия LS Bet: **${money(request.commission)}**\n` +
+          `К получению: **${money(request.payoutAmount)}**`,
+        components: [closeWithdrawTicketRow(request.id)],
       });
-    } catch (error) {
-      console.error("Не смог написать в тикет вывода:", error.message);
     }
   }
 
-  await sendLog(
+  await log(
     "WITHDRAW_APPROVED",
     "✅ Вывод одобрен",
     `Модератор <@${interaction.user.id}> одобрил вывод #${request.id}.`,
@@ -1804,18 +1088,8 @@ async function approveWithdraw(interaction, requestId) {
         inline: true,
       },
       {
-        name: "Сумма вывода",
-        value: formatMoney(request.amount),
-        inline: true,
-      },
-      {
-        name: "Комиссия",
-        value: formatMoney(request.commission),
-        inline: true,
-      },
-      {
         name: "К получению",
-        value: formatMoney(request.payoutAmount),
+        value: money(request.payoutAmount),
         inline: true,
       },
     ]
@@ -1824,7 +1098,7 @@ async function approveWithdraw(interaction, requestId) {
   return interaction.reply({
     content:
       `✅ Вывод #${request.id} одобрен.\n` +
-      `Игроку к выплате: **${formatMoney(request.payoutAmount)}**.`,
+      `Игроку к выплате: **${money(request.payoutAmount)}**.`,
     ephemeral: true,
   });
 }
@@ -1848,16 +1122,9 @@ async function rejectWithdraw(interaction, requestId) {
     });
   }
 
-  if (request.status === "APPROVED") {
+  if (request.status !== "PENDING") {
     return interaction.reply({
-      content: "Эта заявка уже одобрена.",
-      ephemeral: true,
-    });
-  }
-
-  if (request.status === "REJECTED") {
-    return interaction.reply({
-      content: "Эта заявка уже отклонена.",
+      content: "Эта заявка уже обработана.",
       ephemeral: true,
     });
   }
@@ -1905,21 +1172,21 @@ async function rejectWithdraw(interaction, requestId) {
   ]);
 
   if (request.ticketChannelId) {
-    try {
-      const ticketChannel = await client.channels.fetch(request.ticketChannelId);
+    const ticketChannel = await client.channels
+      .fetch(request.ticketChannelId)
+      .catch(() => null);
 
+    if (ticketChannel?.isTextBased()) {
       await ticketChannel.send({
         content:
           `❌ <@${request.user.discordId}>, заявка на вывод **#${request.id}** отклонена.\n` +
-          `На баланс возвращено **${formatMoney(request.amount)}**.`,
-        components: [buildCloseWithdrawTicketRow(request.id)],
+          `На баланс возвращено **${money(request.amount)}**.`,
+        components: [closeWithdrawTicketRow(request.id)],
       });
-    } catch (error) {
-      console.error("Не смог написать в тикет вывода:", error.message);
     }
   }
 
-  await sendLog(
+  await log(
     "WITHDRAW_REJECTED",
     "❌ Вывод отклонён",
     `Модератор <@${interaction.user.id}> отклонил вывод #${request.id}.`,
@@ -1931,16 +1198,16 @@ async function rejectWithdraw(interaction, requestId) {
       },
       {
         name: "Возврат",
-        value: formatMoney(request.amount),
+        value: money(request.amount),
         inline: true,
       },
     ]
   );
 
   return interaction.reply({
-    content: `❌ Вывод #${request.id} отклонён. Игроку возвращено ${formatMoney(
+    content: `❌ Вывод #${request.id} отклонён. Игроку возвращено **${money(
       request.amount
-    )}.`,
+    )}**.`,
     ephemeral: true,
   });
 }
@@ -1971,29 +1238,6 @@ async function closeTicket(interaction, requestId) {
       ephemeral: true,
     });
   }
-
-  await sendLog(
-    "TICKET_CLOSED",
-    "🔒 Тикет закрыт",
-    `Пользователь <@${interaction.user.id}> закрыл тикет по заявке #${request.id}.`,
-    [
-      {
-        name: "Заявка",
-        value: `#${request.id}`,
-        inline: true,
-      },
-      {
-        name: "Игрок",
-        value: `<@${request.user.discordId}>`,
-        inline: true,
-      },
-      {
-        name: "Сумма",
-        value: formatMoney(request.amount),
-        inline: true,
-      },
-    ]
-  );
 
   await interaction.reply({
     content: "🔒 Тикет будет закрыт через 5 секунд.",
@@ -2036,24 +1280,6 @@ async function closeWithdrawTicket(interaction, requestId) {
       ephemeral: true,
     });
   }
-
-  await sendLog(
-    "WITHDRAW_TICKET_CLOSED",
-    "🔒 Тикет вывода закрыт",
-    `Пользователь <@${interaction.user.id}> закрыл тикет вывода #${request.id}.`,
-    [
-      {
-        name: "Игрок",
-        value: `<@${request.user.discordId}>`,
-        inline: true,
-      },
-      {
-        name: "Сумма вывода",
-        value: formatMoney(request.amount),
-        inline: true,
-      },
-    ]
-  );
 
   await interaction.reply({
     content: "🔒 Тикет вывода будет закрыт через 5 секунд.",
@@ -2099,29 +1325,28 @@ async function showAdminTopUps(interaction) {
   const components = [];
 
   for (const request of requests) {
-    const embed = createBaseEmbed(
+    const e = embed(
       request.status === "PENDING" ? LS_THEME.gold : LS_THEME.blue
     )
       .setTitle(`💰 Заявка #${request.id}`)
       .setDescription(
         [
-          `**Статус:** ${getTopUpStatusName(request.status)}`,
+          `**Статус:** ${request.status}`,
           `**Игрок:** <@${request.user.discordId}>`,
           `**Логин:** ${request.login}`,
-          `**Сумма:** ${formatMoney(request.amount)}`,
-          `**Комментарий:** ${request.comment || "Не указан"}`,
+          `**Сумма:** ${money(request.amount)}`,
           `**Ticket:** ${
             request.ticketChannelId
               ? `<#${request.ticketChannelId}>`
               : "Не создан"
           }`,
-          `**Создана:** <t:${getUnixTime(request.createdAt)}:R>`,
+          `**Создана:** <t:${unix(request.createdAt)}:R>`,
         ].join("\n")
       );
 
-    if (request.screenshotUrl) embed.setImage(request.screenshotUrl);
+    if (request.screenshotUrl) e.setImage(request.screenshotUrl);
 
-    embeds.push(embed);
+    embeds.push(e);
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -2174,30 +1399,27 @@ async function showAdminWithdraws(interaction) {
   const components = [];
 
   for (const request of requests) {
-    const embed = createBaseEmbed(LS_THEME.red)
+    const e = embed(LS_THEME.red)
       .setTitle(`💸 Заявка на вывод #${request.id}`)
       .setDescription(
         [
-          `**Статус:** ${getWithdrawStatusName(request.status)}`,
+          `**Статус:** ${request.status}`,
           `**Игрок:** <@${request.user.discordId}>`,
           `**Логин:** ${request.login}`,
-          `**Сумма вывода:** ${formatMoney(request.amount)}`,
-          `**Комиссия ${WITHDRAW_COMMISSION_PERCENT}%:** ${formatMoney(
-            request.commission
-          )}`,
-          `**К получению:** ${formatMoney(request.payoutAmount)}`,
+          `**Сумма вывода:** ${money(request.amount)}`,
+          `**Комиссия:** ${money(request.commission)}`,
+          `**К получению:** ${money(request.payoutAmount)}`,
           `**Реквизиты:** ${request.details}`,
-          `**Комментарий:** ${request.comment || "Не указан"}`,
           `**Ticket:** ${
             request.ticketChannelId
               ? `<#${request.ticketChannelId}>`
               : "Не создан"
           }`,
-          `**Создана:** <t:${getUnixTime(request.createdAt)}:R>`,
+          `**Создана:** <t:${unix(request.createdAt)}:R>`,
         ].join("\n")
       );
 
-    embeds.push(embed);
+    embeds.push(e);
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -2222,7 +1444,7 @@ async function showAdminWithdraws(interaction) {
 }
 
 async function showEventStats(interaction, eventId) {
-  const event = await getFullEvent(eventId);
+  const event = await fullEvent(eventId);
 
   if (!event) {
     return interaction.reply({
@@ -2232,26 +1454,26 @@ async function showEventStats(interaction, eventId) {
   }
 
   const lines = event.options.map((option) => {
-    const total = getOptionBetTotal(option);
+    const total = optionTotal(option);
     const count = option.bets.filter((bet) => bet.status === "ACTIVE").length;
 
-    return `**${option.title}** — ${formatMoney(total)} / ставок: ${count}`;
+    return `**${option.title}** — ${money(total)} / ставок: ${count}`;
   });
 
-  const embed = createBaseEmbed(LS_THEME.green)
+  const e = embed(LS_THEME.green)
     .setTitle(`📊 Статистика события #${event.id}`)
     .setDescription(
       [
         `**${event.title}**`,
         "",
-        `Банк события: **${formatMoney(getEventBank(event))}**`,
+        `Банк события: **${money(eventBank(event))}**`,
         "",
         ...lines,
       ].join("\n")
     );
 
   return interaction.reply({
-    embeds: [embed],
+    embeds: [e],
     ephemeral: true,
   });
 }
@@ -2295,22 +1517,22 @@ async function showAdminEvents(interaction) {
     const option1 = event.options[0];
     const option2 = event.options[1];
 
-    const embed = createBaseEmbed(
+    const e = embed(
       event.status === "OPEN" ? LS_THEME.green : LS_THEME.red
     )
       .setTitle(`Событие #${event.id}: ${event.title}`)
       .setDescription(
         [
-          `**Статус:** ${getStatusName(event.status)}`,
-          `**Банк:** ${formatMoney(getEventBank(event))}`,
-          `**Закрытие ставок:** <t:${getUnixTime(event.closesAt)}:R>`,
+          `**Статус:** ${statusEvent(event.status)}`,
+          `**Банк:** ${money(eventBank(event))}`,
+          `**Закрытие ставок:** <t:${unix(event.closesAt)}:R>`,
           "",
           `1️⃣ ${option1 ? option1.title : "Исход 1"}`,
           `2️⃣ ${option2 ? option2.title : "Исход 2"}`,
         ].join("\n")
       );
 
-    embeds.push(embed);
+    embeds.push(e);
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -2341,6 +1563,324 @@ async function showAdminEvents(interaction) {
   return interaction.reply({
     embeds,
     components,
+    ephemeral: true,
+  });
+}
+
+async function showUserInfo(interaction, targetDiscordUser) {
+  const user = await userOf(targetDiscordUser);
+
+  const totalBets = await prisma.bet.count({
+    where: {
+      userId: user.id,
+    },
+  });
+
+  const activeBets = await prisma.bet.count({
+    where: {
+      userId: user.id,
+      status: "ACTIVE",
+    },
+  });
+
+  const wonBets = await prisma.bet.count({
+    where: {
+      userId: user.id,
+      status: "WON",
+    },
+  });
+
+  const lostBets = await prisma.bet.count({
+    where: {
+      userId: user.id,
+      status: "LOST",
+    },
+  });
+
+  const topUps = await prisma.topUpRequest.aggregate({
+    where: {
+      userId: user.id,
+      status: "APPROVED",
+    },
+    _sum: {
+      amount: true,
+    },
+  });
+
+  const withdraws = await prisma.withdrawRequest.aggregate({
+    where: {
+      userId: user.id,
+      status: "APPROVED",
+    },
+    _sum: {
+      amount: true,
+      payoutAmount: true,
+    },
+  });
+
+  const lotteryPrize = await prisma.lotteryTicket.aggregate({
+    where: {
+      userId: user.id,
+    },
+    _sum: {
+      prize: true,
+    },
+  });
+
+  const referralsCount = await prisma.user.count({
+    where: {
+      referredByUserId: user.id,
+    },
+  });
+
+  const referralEarned = await prisma.referralReward.aggregate({
+    where: {
+      referrerId: user.id,
+    },
+    _sum: {
+      amount: true,
+    },
+  });
+
+  const winPercent =
+    wonBets + lostBets > 0
+      ? ((wonBets / (wonBets + lostBets)) * 100).toFixed(1)
+      : "0.0";
+
+  const e = embed(LS_THEME.gold)
+    .setTitle("👤 LS Bet — информация об игроке")
+    .setThumbnail(targetDiscordUser.displayAvatarURL())
+    .setDescription(
+      [
+        `**Игрок:** <@${targetDiscordUser.id}>`,
+        `**Discord ID:** \`${targetDiscordUser.id}\``,
+        `**Username:** \`${targetDiscordUser.username}\``,
+        "",
+        LS_TEXT.line,
+      ].join("\n")
+    )
+    .addFields(
+      {
+        name: "Баланс",
+        value: money(user.balance),
+        inline: true,
+      },
+      {
+        name: "Создан в базе",
+        value: `<t:${unix(user.createdAt)}:R>`,
+        inline: true,
+      },
+      {
+        name: "Всего ставок",
+        value: String(totalBets),
+        inline: true,
+      },
+      {
+        name: "Активные ставки",
+        value: String(activeBets),
+        inline: true,
+      },
+      {
+        name: "Выиграно ставок",
+        value: String(wonBets),
+        inline: true,
+      },
+      {
+        name: "Проиграно ставок",
+        value: String(lostBets),
+        inline: true,
+      },
+      {
+        name: "Процент побед",
+        value: `${winPercent}%`,
+        inline: true,
+      },
+      {
+        name: "Пополнено всего",
+        value: money(topUps._sum.amount || 0),
+        inline: true,
+      },
+      {
+        name: "Выводов одобрено",
+        value: money(withdraws._sum.amount || 0),
+        inline: true,
+      },
+      {
+        name: "К выплате выводами",
+        value: money(withdraws._sum.payoutAmount || 0),
+        inline: true,
+      },
+      {
+        name: "Выигрыш в лотерее",
+        value: money(lotteryPrize._sum.prize || 0),
+        inline: true,
+      },
+      {
+        name: "Рефералов",
+        value: String(referralsCount),
+        inline: true,
+      },
+      {
+        name: "Заработано с рефералов",
+        value: money(referralEarned._sum.amount || 0),
+        inline: true,
+      }
+    );
+
+  return interaction.editReply({
+    embeds: [e],
+  });
+}
+
+async function setUserBalance(interaction, targetDiscordUser, amount) {
+  if (await adminOnly(interaction)) return;
+
+  if (!Number.isInteger(amount) || amount < 0) {
+    return interaction.reply({
+      content: "Баланс должен быть числом 0 или больше.",
+      ephemeral: true,
+    });
+  }
+
+  const user = await userOf(targetDiscordUser);
+  const oldBalance = user.balance;
+  const difference = amount - oldBalance;
+
+  await prisma.$transaction([
+    prisma.user.update({
+      where: {
+        id: user.id,
+      },
+      data: {
+        balance: amount,
+      },
+    }),
+
+    prisma.transaction.create({
+      data: {
+        userId: user.id,
+        amount: difference,
+        type: "BALANCE_SET",
+        comment: `Администратор ${interaction.user.username} установил баланс. Было: ${money(
+          oldBalance
+        )}, стало: ${money(amount)}`,
+      },
+    }),
+  ]);
+
+  return interaction.reply({
+    content:
+      `✅ Баланс игрока <@${targetDiscordUser.id}> установлен.\n` +
+      `Было: **${money(oldBalance)}**\n` +
+      `Стало: **${money(amount)}**`,
+    ephemeral: true,
+  });
+}
+
+async function removeUserBalance(interaction, targetDiscordUser, amount) {
+  if (await adminOnly(interaction)) return;
+
+  if (!Number.isInteger(amount) || amount <= 0) {
+    return interaction.reply({
+      content: "Сумма списания должна быть больше 0.",
+      ephemeral: true,
+    });
+  }
+
+  const user = await userOf(targetDiscordUser);
+  const removeAmount = Math.min(amount, user.balance);
+  const newBalance = user.balance - removeAmount;
+
+  await prisma.$transaction([
+    prisma.user.update({
+      where: {
+        id: user.id,
+      },
+      data: {
+        balance: newBalance,
+      },
+    }),
+
+    prisma.transaction.create({
+      data: {
+        userId: user.id,
+        amount: -removeAmount,
+        type: "ADMIN_REMOVE",
+        comment: `Администратор ${interaction.user.username} списал баланс.`,
+      },
+    }),
+  ]);
+
+  return interaction.reply({
+    content:
+      `✅ У игрока <@${targetDiscordUser.id}> списано **${money(
+        removeAmount
+      )}**.\n` +
+      `Новый баланс: **${money(newBalance)}**.`,
+    ephemeral: true,
+  });
+}
+
+async function showAdminUsers(interaction) {
+  if (await adminOnly(interaction)) return;
+
+  const users = await prisma.user.findMany({
+    orderBy: {
+      balance: "desc",
+    },
+    take: 15,
+    include: {
+      bets: true,
+      topUpRequests: true,
+      withdrawRequests: true,
+      referrals: true,
+    },
+  });
+
+  if (users.length === 0) {
+    return interaction.reply({
+      content: "Пользователей пока нет.",
+      ephemeral: true,
+    });
+  }
+
+  const text = users
+    .map((user, index) => {
+      const approvedTopups = user.topUpRequests.filter(
+        (request) => request.status === "APPROVED"
+      );
+      const approvedWithdraws = user.withdrawRequests.filter(
+        (request) => request.status === "APPROVED"
+      );
+
+      const totalTopups = approvedTopups.reduce(
+        (sum, item) => sum + item.amount,
+        0
+      );
+
+      const totalWithdraws = approvedWithdraws.reduce(
+        (sum, item) => sum + item.amount,
+        0
+      );
+
+      return [
+        `**#${index + 1} — <@${user.discordId}>**`,
+        `Баланс: **${money(user.balance)}**`,
+        `Ставок: **${user.bets.length}**`,
+        `Пополнено: **${money(totalTopups)}**`,
+        `Выведено: **${money(totalWithdraws)}**`,
+        `Рефералов: **${user.referrals.length}**`,
+        `Discord ID: \`${user.discordId}\``,
+      ].join("\n");
+    })
+    .join("\n\n");
+
+  const e = embed(LS_THEME.gold)
+    .setTitle("👥 LS Bet — список игроков")
+    .setDescription(text.slice(0, 4000));
+
+  return interaction.reply({
+    embeds: [e],
     ephemeral: true,
   });
 }
@@ -2378,12 +1918,6 @@ async function adminSetEventLive(interaction, eventId) {
   });
 
   await updateEventMessage(eventId);
-
-  await sendLog(
-    "EVENT_LIVE",
-    "🔴 Событие переведено в LIVE",
-    `Модератор <@${interaction.user.id}> перевёл событие **#${event.id} ${event.title}** в LIVE.`
-  );
 
   return interaction.reply({
     content: `🔴 Событие **${event.title}** переведено в LIVE. Ставки закрыты.`,
@@ -2515,35 +2049,7 @@ async function adminFinishEvent(interaction, eventId, winnerNumber) {
   });
 
   await updateEventMessage(event.id);
-  await publishRpEventResult(event, winnerOption, winnersCount, totalPaid);
-
-  await sendLog(
-    "EVENT_FINISHED",
-    "🏁 Событие завершено",
-    `Модератор <@${interaction.user.id}> завершил событие **#${event.id} ${event.title}**.`,
-    [
-      {
-        name: "Победный исход",
-        value: winnerOption.title,
-        inline: true,
-      },
-      {
-        name: "Победителей",
-        value: String(winnersCount),
-        inline: true,
-      },
-      {
-        name: "Выплачено",
-        value: formatMoney(totalPaid),
-        inline: true,
-      },
-      {
-        name: "Канал результатов",
-        value: `<#${RESULT_CHANNEL_ID}>`,
-        inline: true,
-      },
-    ]
-  );
+  await publishEventResult(event, winnerOption, winnersCount, totalPaid);
 
   return interaction.reply({
     content:
@@ -2551,14 +2057,23 @@ async function adminFinishEvent(interaction, eventId, winnerNumber) {
       `Событие: **${event.title}**\n` +
       `Победный исход: **${winnerOption.title}**\n` +
       `Победителей: **${winnersCount}**\n` +
-      `Выплачено: **${formatMoney(totalPaid)}**\n` +
+      `Выплачено: **${money(totalPaid)}**\n` +
       `Итоги опубликованы в <#${RESULT_CHANNEL_ID}>`,
     ephemeral: true,
   });
 }
+function coinSideName(side) {
+  if (side === "HEADS") return "Орёл";
+  if (side === "TAILS") return "Решка";
+  return side;
+}
 
-function buildCoinflipStartPanel() {
-  const embed = createBaseEmbed(LS_THEME.gold)
+function oppositeSide(side) {
+  return side === "HEADS" ? "TAILS" : "HEADS";
+}
+
+function coinflipPanel() {
+  const e = embed(LS_THEME.gold)
     .setTitle("🪙 LS Bet Coinflip")
     .setDescription(
       [
@@ -2566,25 +2081,12 @@ function buildCoinflipStartPanel() {
         "COINFLIP DUEL",
         "1 VS 1 • DOUBLE OR NOTHING",
         "```",
-        "**Создай игру и выбери сторону монеты.**",
-        "",
-        "После создания второй игрок сможет принять игру кнопкой.",
-        "Победитель забирает весь банк **x2**.",
+        "Создай игру, выбери сторону монеты и сумму.",
+        "Второй игрок принимает игру кнопкой.",
+        "Победитель забирает весь банк.",
         "",
         LS_TEXT.line,
       ].join("\n")
-    )
-    .addFields(
-      {
-        name: "🦅 Орёл",
-        value: "Выбрать сторону Орёл.",
-        inline: true,
-      },
-      {
-        name: "🪙 Решка",
-        value: "Выбрать сторону Решка.",
-        inline: true,
-      }
     );
 
   const row = new ActionRowBuilder().addComponents(
@@ -2600,40 +2102,32 @@ function buildCoinflipStartPanel() {
   );
 
   return {
-    embeds: [embed],
+    embeds: [e],
     components: [row],
     ephemeral: true,
   };
 }
 
-function coinSideName(side) {
-  if (side === "HEADS") return "Орёл";
-  if (side === "TAILS") return "Решка";
-  return side;
-}
-
-function oppositeSide(side) {
-  return side === "HEADS" ? "TAILS" : "HEADS";
-}
-
-function buildCoinflipAmountModal(side) {
+function coinflipAmountModal(side) {
   const modal = new ModalBuilder()
     .setCustomId(`coinflip_modal:${side}`)
     .setTitle(`Coinflip — ${coinSideName(side)}`);
 
-  const amountInput = new TextInputBuilder()
-    .setCustomId("amount")
-    .setLabel("Сумма игры в $")
-    .setPlaceholder("Например: 500")
-    .setRequired(true)
-    .setStyle(TextInputStyle.Short);
-
-  modal.addComponents(new ActionRowBuilder().addComponents(amountInput));
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("amount")
+        .setLabel("Сумма игры в $")
+        .setPlaceholder("Например: 500")
+        .setRequired(true)
+        .setStyle(TextInputStyle.Short)
+    )
+  );
 
   return modal;
 }
 
-function buildCoinflipEmbed(game) {
+function coinflipEmbed(game) {
   const color =
     game.status === "WAITING"
       ? LS_THEME.gold
@@ -2648,7 +2142,7 @@ function buildCoinflipEmbed(game) {
       ? "❌ Игра отменена"
       : "🏁 Игра завершена";
 
-  const embed = createBaseEmbed(color)
+  const e = embed(color)
     .setTitle(`🪙 COINFLIP #${game.id}`)
     .setDescription(
       [
@@ -2656,8 +2150,8 @@ function buildCoinflipEmbed(game) {
         "DOUBLE OR NOTHING",
         "```",
         `**Создатель:** <@${game.creator.discordId}>`,
-        `**Ставка:** ${formatMoney(game.amount)}`,
-        `**Банк:** ${formatMoney(game.amount * 2)}`,
+        `**Ставка:** ${money(game.amount)}`,
+        `**Банк:** ${money(game.amount * 2)}`,
         `**Сторона создателя:** ${coinSideName(game.creatorSide)}`,
         `**Статус:** ${statusText}`,
         "",
@@ -2666,7 +2160,7 @@ function buildCoinflipEmbed(game) {
     );
 
   if (game.status === "FINISHED") {
-    embed.addFields(
+    e.addFields(
       {
         name: "Выпало",
         value: coinSideName(game.resultSide),
@@ -2679,31 +2173,31 @@ function buildCoinflipEmbed(game) {
       },
       {
         name: "Выигрыш",
-        value: formatMoney(game.amount * 2),
+        value: money(game.amount * 2),
         inline: true,
       }
     );
   }
 
-  return embed;
+  return e;
 }
 
-function buildCoinflipButtons(game) {
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`coinflip_accept:${game.id}`)
-      .setLabel("✅ Принять игру")
-      .setStyle(ButtonStyle.Success)
-      .setDisabled(game.status !== "WAITING"),
+function coinflipButtons(game) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`coinflip_accept:${game.id}`)
+        .setLabel("✅ Принять игру")
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(game.status !== "WAITING"),
 
-    new ButtonBuilder()
-      .setCustomId(`coinflip_cancel:${game.id}`)
-      .setLabel("❌ Отменить")
-      .setStyle(ButtonStyle.Danger)
-      .setDisabled(game.status !== "WAITING")
-  );
-
-  return [row];
+      new ButtonBuilder()
+        .setCustomId(`coinflip_cancel:${game.id}`)
+        .setLabel("❌ Отменить")
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(game.status !== "WAITING")
+    ),
+  ];
 }
 
 async function getCoinflipGame(gameId) {
@@ -2734,17 +2228,17 @@ async function createCoinflipGame(interaction, side, amount) {
     });
   }
 
-  const user = await getOrCreateUser(interaction.user);
+  const user = await userOf(interaction.user);
 
   if (user.balance < amount) {
     return interaction.reply({
-      content: `Недостаточно средств. Твой баланс: **${formatMoney(user.balance)}**.`,
+      content: `Недостаточно средств. Твой баланс: **${money(user.balance)}**.`,
       ephemeral: true,
     });
   }
 
   const game = await prisma.$transaction(async (tx) => {
-    const updatedUser = await tx.user.update({
+    await tx.user.update({
       where: {
         id: user.id,
       },
@@ -2766,7 +2260,7 @@ async function createCoinflipGame(interaction, side, amount) {
 
     return tx.coinflipGame.create({
       data: {
-        creatorUserId: updatedUser.id,
+        creatorUserId: user.id,
         amount,
         creatorSide: side,
         opponentSide: oppositeSide(side),
@@ -2783,8 +2277,8 @@ async function createCoinflipGame(interaction, side, amount) {
 
   const message = await interaction.channel.send({
     content: "🪙 **Новая игра Coinflip**",
-    embeds: [buildCoinflipEmbed(game)],
-    components: buildCoinflipButtons(game),
+    embeds: [coinflipEmbed(game)],
+    components: coinflipButtons(game),
   });
 
   await prisma.coinflipGame.update({
@@ -2796,37 +2290,15 @@ async function createCoinflipGame(interaction, side, amount) {
     },
   });
 
-  await sendLog(
-    "COINFLIP_CREATED",
-    "🪙 Coinflip создан",
-    `Игрок <@${interaction.user.id}> создал Coinflip #${game.id}.`,
-    [
-      {
-        name: "Сумма",
-        value: formatMoney(amount),
-        inline: true,
-      },
-      {
-        name: "Сторона",
-        value: coinSideName(side),
-        inline: true,
-      },
-      {
-        name: "Канал",
-        value: `<#${COINFLIP_CHANNEL_ID}>`,
-        inline: true,
-      },
-    ]
-  );
-
   return interaction.reply({
-    content: `✅ Coinflip создан на сумму **${formatMoney(amount)}**.`,
+    content: `✅ Coinflip создан на сумму **${money(amount)}**.`,
     ephemeral: true,
   });
 }
 
 async function updateCoinflipMessage(gameId) {
   const game = await getCoinflipGame(gameId);
+
   if (!game || !game.channelId || !game.messageId) return;
 
   try {
@@ -2840,8 +2312,8 @@ async function updateCoinflipMessage(gameId) {
           : game.status === "CANCELLED"
           ? "❌ **Coinflip отменён**"
           : "🪙 **Новая игра Coinflip**",
-      embeds: [buildCoinflipEmbed(game)],
-      components: game.status === "WAITING" ? buildCoinflipButtons(game) : [],
+      embeds: [coinflipEmbed(game)],
+      components: game.status === "WAITING" ? coinflipButtons(game) : [],
     });
   } catch (error) {
     console.error("Не смог обновить Coinflip:", error.message);
@@ -2872,11 +2344,11 @@ async function acceptCoinflip(interaction, gameId) {
     });
   }
 
-  const opponent = await getOrCreateUser(interaction.user);
+  const opponent = await userOf(interaction.user);
 
   if (opponent.balance < game.amount) {
     return interaction.reply({
-      content: `Недостаточно средств. Твой баланс: **${formatMoney(opponent.balance)}**.`,
+      content: `Недостаточно средств. Твой баланс: **${money(opponent.balance)}**.`,
       ephemeral: true,
     });
   }
@@ -2886,6 +2358,7 @@ async function acceptCoinflip(interaction, gameId) {
     resultSide === game.creatorSide ? game.creatorUserId : opponent.id;
   const winnerDiscordId =
     resultSide === game.creatorSide ? game.creator.discordId : opponent.discordId;
+
   const bank = game.amount * 2;
 
   await prisma.$transaction(async (tx) => {
@@ -2925,7 +2398,9 @@ async function acceptCoinflip(interaction, gameId) {
         userId: winnerUserId,
         amount: bank,
         type: "COINFLIP_WIN",
-        comment: `Победа в Coinflip #${game.id}. Выпало: ${coinSideName(resultSide)}`,
+        comment: `Победа в Coinflip #${game.id}. Выпало: ${coinSideName(
+          resultSide
+        )}`,
       },
     });
 
@@ -2946,36 +2421,13 @@ async function acceptCoinflip(interaction, gameId) {
 
   await updateCoinflipMessage(game.id);
 
-  await interaction.reply({
+  return interaction.reply({
     content:
       `🏁 **Coinflip завершён**\n` +
       `Выпало: **${coinSideName(resultSide)}**\n` +
       `Победитель: <@${winnerDiscordId}>\n` +
-      `Выигрыш: **${formatMoney(bank)}**`,
+      `Выигрыш: **${money(bank)}**`,
   });
-
-  await sendLog(
-    "COINFLIP_FINISHED",
-    "🏁 Coinflip завершён",
-    `Coinflip #${game.id} завершён.`,
-    [
-      {
-        name: "Выпало",
-        value: coinSideName(resultSide),
-        inline: true,
-      },
-      {
-        name: "Победитель",
-        value: `<@${winnerDiscordId}>`,
-        inline: true,
-      },
-      {
-        name: "Банк",
-        value: formatMoney(bank),
-        inline: true,
-      },
-    ]
-  );
 }
 
 async function cancelCoinflip(interaction, gameId) {
@@ -3039,151 +2491,212 @@ async function cancelCoinflip(interaction, gameId) {
 
   await updateCoinflipMessage(game.id);
 
-  await sendLog(
-    "COINFLIP_CANCELLED",
-    "❌ Coinflip отменён",
-    `Coinflip #${game.id} отменил <@${interaction.user.id}>.`,
-    [
-      {
-        name: "Возврат",
-        value: formatMoney(game.amount),
-        inline: true,
-      },
-    ]
-  );
-
   return interaction.reply({
-    content: `❌ Coinflip #${game.id} отменён. Создателю возвращено ${formatMoney(
+    content: `❌ Coinflip #${game.id} отменён. Создателю возвращено **${money(
       game.amount
-    )}.`,
+    )}**.`,
     ephemeral: true,
   });
 }
 
-function buildPromoModal() {
+function promoModal() {
   const modal = new ModalBuilder()
     .setCustomId("promo_activate_modal")
     .setTitle("LS Bet — активация промокода");
 
-  const codeInput = new TextInputBuilder()
-    .setCustomId("code")
-    .setLabel("Промокод")
-    .setPlaceholder("Например: WELCOME1000")
-    .setRequired(true)
-    .setStyle(TextInputStyle.Short);
-
-  modal.addComponents(new ActionRowBuilder().addComponents(codeInput));
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("code")
+        .setLabel("Промокод")
+        .setPlaceholder("Например: START")
+        .setRequired(true)
+        .setStyle(TextInputStyle.Short)
+    )
+  );
 
   return modal;
 }
 
-function buildPromoCreateModal() {
+function promoCreateModal() {
   const modal = new ModalBuilder()
     .setCustomId("promo_create_modal")
     .setTitle("LS Bet — обычный промокод");
 
-  const codeInput = new TextInputBuilder()
-    .setCustomId("code")
-    .setLabel("Код")
-    .setPlaceholder("Например: WELCOME1000")
-    .setRequired(true)
-    .setStyle(TextInputStyle.Short);
-
-  const amountInput = new TextInputBuilder()
-    .setCustomId("amount")
-    .setLabel("Сумма выдачи в $")
-    .setPlaceholder("Например: 1000")
-    .setRequired(true)
-    .setStyle(TextInputStyle.Short);
-
-  const maxUsesInput = new TextInputBuilder()
-    .setCustomId("maxUses")
-    .setLabel("Лимит активаций")
-    .setPlaceholder("Например: 50. Можно оставить пустым.")
-    .setRequired(false)
-    .setStyle(TextInputStyle.Short);
-
   modal.addComponents(
-    new ActionRowBuilder().addComponents(codeInput),
-    new ActionRowBuilder().addComponents(amountInput),
-    new ActionRowBuilder().addComponents(maxUsesInput)
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("code")
+        .setLabel("Код")
+        .setPlaceholder("Например: START")
+        .setRequired(true)
+        .setStyle(TextInputStyle.Short)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("amount")
+        .setLabel("Сумма выдачи в $")
+        .setPlaceholder("Например: 100")
+        .setRequired(true)
+        .setStyle(TextInputStyle.Short)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("maxUses")
+        .setLabel("Лимит активаций")
+        .setPlaceholder("Например: 30. Можно оставить пустым.")
+        .setRequired(false)
+        .setStyle(TextInputStyle.Short)
+    )
   );
 
   return modal;
 }
 
-function buildReferralPromoCreateModal() {
+function referralPromoCreateModal() {
   const modal = new ModalBuilder()
     .setCustomId("promo_create_referral_modal")
     .setTitle("LS Bet — реферальный промокод");
 
-  const codeInput = new TextInputBuilder()
-    .setCustomId("code")
-    .setLabel("Код промокода")
-    .setPlaceholder("Например: MOSCOW")
-    .setRequired(true)
-    .setStyle(TextInputStyle.Short);
-
-  const ownerInput = new TextInputBuilder()
-    .setCustomId("ownerDiscordId")
-    .setLabel("Discord ID владельца")
-    .setPlaceholder("Например: 123456789012345678")
-    .setRequired(true)
-    .setStyle(TextInputStyle.Short);
-
-  const amountInput = new TextInputBuilder()
-    .setCustomId("amount")
-    .setLabel("Бонус новому игроку в $")
-    .setPlaceholder("Например: 1000")
-    .setRequired(true)
-    .setStyle(TextInputStyle.Short);
-
-  const percentInput = new TextInputBuilder()
-    .setCustomId("refPercent")
-    .setLabel("Процент рефереру от 1 до 100")
-    .setPlaceholder("Например: 5")
-    .setRequired(true)
-    .setStyle(TextInputStyle.Short);
-
-  const maxUsesInput = new TextInputBuilder()
-    .setCustomId("maxUses")
-    .setLabel("Лимит активаций")
-    .setPlaceholder("Например: 50. Можно оставить пустым.")
-    .setRequired(false)
-    .setStyle(TextInputStyle.Short);
-
   modal.addComponents(
-    new ActionRowBuilder().addComponents(codeInput),
-    new ActionRowBuilder().addComponents(ownerInput),
-    new ActionRowBuilder().addComponents(amountInput),
-    new ActionRowBuilder().addComponents(percentInput),
-    new ActionRowBuilder().addComponents(maxUsesInput)
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("code")
+        .setLabel("Код")
+        .setPlaceholder("Например: AILANI")
+        .setRequired(true)
+        .setStyle(TextInputStyle.Short)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("ownerDiscordId")
+        .setLabel("Discord ID владельца")
+        .setRequired(true)
+        .setStyle(TextInputStyle.Short)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("amount")
+        .setLabel("Бонус новому игроку в $")
+        .setPlaceholder("Например: 100")
+        .setRequired(true)
+        .setStyle(TextInputStyle.Short)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("refPercent")
+        .setLabel("Процент рефереру от 1 до 100")
+        .setPlaceholder("Например: 5")
+        .setRequired(true)
+        .setStyle(TextInputStyle.Short)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("maxUses")
+        .setLabel("Лимит активаций")
+        .setPlaceholder("Например: 30. Можно оставить пустым.")
+        .setRequired(false)
+        .setStyle(TextInputStyle.Short)
+    )
   );
 
   return modal;
 }
 
-function buildAdminPromoPanel() {
-  const embed = createBaseEmbed(LS_THEME.gold)
+function promoEditModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("promo_edit_modal")
+    .setTitle("LS Bet — изменить промокод");
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("code")
+        .setLabel("Какой промокод изменить?")
+        .setRequired(true)
+        .setStyle(TextInputStyle.Short)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("amount")
+        .setLabel("Новая сумма бонуса")
+        .setPlaceholder("Пусто = не менять")
+        .setRequired(false)
+        .setStyle(TextInputStyle.Short)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("maxUses")
+        .setLabel("Новый лимит активаций")
+        .setPlaceholder("Пусто = не менять. 0 = без лимита")
+        .setRequired(false)
+        .setStyle(TextInputStyle.Short)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("active")
+        .setLabel("Статус")
+        .setPlaceholder("on / off / пусто = не менять")
+        .setRequired(false)
+        .setStyle(TextInputStyle.Short)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("referral")
+        .setLabel("Рефералка")
+        .setPlaceholder("ID:процент или none")
+        .setRequired(false)
+        .setStyle(TextInputStyle.Short)
+    )
+  );
+
+  return modal;
+}
+
+function promoDeleteModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("promo_delete_modal")
+    .setTitle("LS Bet — удалить промокод");
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("code")
+        .setLabel("Какой промокод удалить?")
+        .setRequired(true)
+        .setStyle(TextInputStyle.Short)
+    )
+  );
+
+  return modal;
+}
+
+function adminPromoPanel() {
+  const e = embed(LS_THEME.gold)
     .setTitle("🎟️ LS Bet — Промокоды")
     .setDescription(
       [
         "```",
         "PROMO CONTROL",
-        "BONUS • REFERRAL • STATS",
+        "BONUS • REFERRAL • EDIT • DELETE",
         "```",
-        "Здесь можно управлять обычными и реферальными промокодами.",
-        "",
-        "**Обычный промокод** — выдаёт бонус игроку.",
-        "**Реферальный промокод** — закрепляется за Discord-пользователем.",
-        "",
-        "Владелец реферального промокода получает процент со всех одобренных пополнений своих рефералов.",
+        "Создание, редактирование, удаление и статистика промокодов.",
         "",
         LS_TEXT.line,
       ].join("\n")
     );
 
-  const row = new ActionRowBuilder().addComponents(
+  const r1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("promo_create")
       .setLabel("➕ Обычный")
@@ -3194,6 +2707,18 @@ function buildAdminPromoPanel() {
       .setLabel("🤝 Реферальный")
       .setStyle(ButtonStyle.Primary),
 
+    new ButtonBuilder()
+      .setCustomId("promo_edit")
+      .setLabel("✏️ Изменить")
+      .setStyle(ButtonStyle.Secondary),
+
+    new ButtonBuilder()
+      .setCustomId("promo_delete")
+      .setLabel("🗑️ Удалить")
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  const r2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("promo_stats")
       .setLabel("📊 Промокоды")
@@ -3206,10 +2731,26 @@ function buildAdminPromoPanel() {
   );
 
   return {
-    embeds: [embed],
-    components: [row],
+    embeds: [e],
+    components: [r1, r2],
     ephemeral: true,
   };
+}
+
+function parseActiveValue(value) {
+  const raw = String(value || "").trim().toLowerCase();
+
+  if (!raw) return null;
+
+  if (["on", "true", "yes", "1", "вкл", "активен"].includes(raw)) {
+    return true;
+  }
+
+  if (["off", "false", "no", "0", "выкл", "выключен"].includes(raw)) {
+    return false;
+  }
+
+  return "INVALID";
 }
 
 async function createPromoCode(interaction, codeRaw, amount, maxUsesRaw) {
@@ -3254,26 +2795,8 @@ async function createPromoCode(interaction, codeRaw, amount, maxUsesRaw) {
       },
     });
 
-    await sendLog(
-      "PROMO_CREATED",
-      "🎟️ Промокод создан",
-      `Модератор <@${interaction.user.id}> создал промокод **${promo.code}**.`,
-      [
-        {
-          name: "Сумма",
-          value: formatMoney(amount),
-          inline: true,
-        },
-        {
-          name: "Лимит",
-          value: maxUses ? String(maxUses) : "Без лимита",
-          inline: true,
-        },
-      ]
-    );
-
     return interaction.reply({
-      content: `✅ Обычный промокод **${promo.code}** создан. Сумма: **${formatMoney(
+      content: `✅ Обычный промокод **${promo.code}** создан. Сумма: **${money(
         amount
       )}**.`,
       ephemeral: true,
@@ -3351,7 +2874,7 @@ async function createReferralPromoCode(
     });
   }
 
-  const ownerUser = await getOrCreateUser(ownerDiscordUser);
+  const ownerUser = await userOf(ownerDiscordUser);
 
   try {
     const promo = await prisma.promoCode.create({
@@ -3367,34 +2890,11 @@ async function createReferralPromoCode(
       },
     });
 
-    await sendLog(
-      "REFERRAL_PROMO_CREATED",
-      "🤝 Реферальный промокод создан",
-      `Модератор <@${interaction.user.id}> создал реферальный промокод **${promo.code}** для <@${ownerDiscordId}>.`,
-      [
-        {
-          name: "Бонус новому игроку",
-          value: formatMoney(amount),
-          inline: true,
-        },
-        {
-          name: "Процент рефереру",
-          value: `${refPercent}%`,
-          inline: true,
-        },
-        {
-          name: "Лимит",
-          value: maxUses ? String(maxUses) : "Без лимита",
-          inline: true,
-        },
-      ]
-    );
-
     return interaction.reply({
       content:
         `✅ Реферальный промокод **${promo.code}** создан.\n` +
         `Владелец: <@${ownerDiscordId}>\n` +
-        `Бонус новому игроку: **${formatMoney(amount)}**\n` +
+        `Бонус новому игроку: **${money(amount)}**\n` +
         `Процент с пополнений: **${refPercent}%**`,
       ephemeral: true,
     });
@@ -3404,6 +2904,225 @@ async function createReferralPromoCode(
       ephemeral: true,
     });
   }
+}
+async function editPromoCode(
+  interaction,
+  codeRaw,
+  amountRaw,
+  maxUsesRaw,
+  activeRaw,
+  referralRaw
+) {
+  if (await adminOnly(interaction)) return;
+
+  const code = codeRaw.trim().toUpperCase();
+
+  const promo = await prisma.promoCode.findUnique({
+    where: {
+      code,
+    },
+    include: {
+      owner: true,
+    },
+  });
+
+  if (!promo) {
+    return interaction.reply({
+      content: `❌ Промокод **${code}** не найден.`,
+      ephemeral: true,
+    });
+  }
+
+  const data = {};
+  const changes = [];
+
+  if (String(amountRaw || "").trim() !== "") {
+    const amount = Number(amountRaw);
+
+    if (!Number.isInteger(amount) || amount < 0) {
+      return interaction.reply({
+        content: "❌ Сумма бонуса должна быть числом 0 или больше.",
+        ephemeral: true,
+      });
+    }
+
+    data.amount = amount;
+    changes.push(`Бонус: **${money(promo.amount)} → ${money(amount)}**`);
+  }
+
+  if (String(maxUsesRaw || "").trim() !== "") {
+    const maxUses = Number(maxUsesRaw);
+
+    if (!Number.isInteger(maxUses) || maxUses < 0) {
+      return interaction.reply({
+        content: "❌ Лимит активаций должен быть числом 0 или больше.",
+        ephemeral: true,
+      });
+    }
+
+    data.maxUses = maxUses === 0 ? null : maxUses;
+
+    changes.push(
+      `Лимит: **${promo.maxUses ? promo.maxUses : "без лимита"} → ${
+        data.maxUses ? data.maxUses : "без лимита"
+      }**`
+    );
+  }
+
+  if (String(activeRaw || "").trim() !== "") {
+    const activeValue = parseActiveValue(activeRaw);
+
+    if (activeValue === "INVALID") {
+      return interaction.reply({
+        content: "❌ Статус укажи так: `on` или `off`.",
+        ephemeral: true,
+      });
+    }
+
+    data.isActive = activeValue;
+
+    changes.push(
+      `Статус: **${promo.isActive ? "активен" : "выключен"} → ${
+        activeValue ? "активен" : "выключен"
+      }**`
+    );
+  }
+
+  if (String(referralRaw || "").trim() !== "") {
+    const referralValue = referralRaw.trim();
+    const normalized = referralValue.toLowerCase();
+
+    if (["none", "bonus", "обычный", "нет", "remove"].includes(normalized)) {
+      data.type = "BONUS";
+      data.ownerUserId = null;
+      data.refPercent = null;
+
+      changes.push("Тип: **реферальный → обычный**");
+    } else {
+      const cleanReferral = referralValue.replace(/[<@!>]/g, "");
+      const [ownerDiscordIdRaw, percentRaw] = cleanReferral.split(":");
+
+      const ownerDiscordId = String(ownerDiscordIdRaw || "").trim();
+
+      const refPercent =
+        percentRaw && String(percentRaw).trim() !== ""
+          ? Number(percentRaw)
+          : promo.refPercent || 5;
+
+      if (!ownerDiscordId || !/^\d+$/.test(ownerDiscordId)) {
+        return interaction.reply({
+          content:
+            "❌ Рефералку укажи в формате:\n" +
+            "`DiscordID:процент`\n\n" +
+            "Пример:\n" +
+            "`123456789012345678:5`\n\n" +
+            "Чтобы сделать обычный промокод, напиши:\n" +
+            "`none`",
+          ephemeral: true,
+        });
+      }
+
+      if (!Number.isInteger(refPercent) || refPercent < 1 || refPercent > 100) {
+        return interaction.reply({
+          content: "❌ Процент рефералки должен быть от 1 до 100.",
+          ephemeral: true,
+        });
+      }
+
+      const ownerDiscordUser = await client.users
+        .fetch(ownerDiscordId)
+        .catch(() => null);
+
+      if (!ownerDiscordUser) {
+        return interaction.reply({
+          content: "❌ Не смог найти пользователя Discord по этому ID.",
+          ephemeral: true,
+        });
+      }
+
+      const ownerUser = await userOf(ownerDiscordUser);
+
+      data.type = "REFERRAL";
+      data.ownerUserId = ownerUser.id;
+      data.refPercent = refPercent;
+
+      changes.push(
+        `Рефералка: **владелец <@${ownerDiscordId}>, процент ${refPercent}%**`
+      );
+    }
+  }
+
+  if (Object.keys(data).length === 0) {
+    return interaction.reply({
+      content:
+        "Ты не указал, что изменить.\n\n" +
+        "Заполни хотя бы одно поле: сумма, лимит, статус или рефералка.",
+      ephemeral: true,
+    });
+  }
+
+  const updatedPromo = await prisma.promoCode.update({
+    where: {
+      id: promo.id,
+    },
+    data,
+    include: {
+      owner: true,
+    },
+  });
+
+  return interaction.reply({
+    content:
+      `✅ Промокод **${updatedPromo.code}** изменён.\n\n` +
+      changes.join("\n"),
+    ephemeral: true,
+  });
+}
+
+async function deletePromoCode(interaction, codeRaw) {
+  if (await adminOnly(interaction)) return;
+
+  const code = codeRaw.trim().toUpperCase();
+
+  const promo = await prisma.promoCode.findUnique({
+    where: {
+      code,
+    },
+    include: {
+      activations: true,
+      owner: true,
+    },
+  });
+
+  if (!promo) {
+    return interaction.reply({
+      content: `❌ Промокод **${code}** не найден.`,
+      ephemeral: true,
+    });
+  }
+
+  const activationsCount = promo.activations.length;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.promoActivation.deleteMany({
+      where: {
+        promoCodeId: promo.id,
+      },
+    });
+
+    await tx.promoCode.delete({
+      where: {
+        id: promo.id,
+      },
+    });
+  });
+
+  return interaction.reply({
+    content:
+      `🗑️ Промокод **${promo.code}** удалён.\n` +
+      `Удалено активаций: **${activationsCount}**.`,
+    ephemeral: true,
+  });
 }
 
 async function showPromoStats(interaction) {
@@ -3443,11 +3162,11 @@ async function showPromoStats(interaction) {
         promo.type === "REFERRAL"
           ? `Процент: **${promo.refPercent || 5}%**`
           : null,
-        `Бонус игроку: **${formatMoney(promo.amount)}**`,
+        `Бонус игроку: **${money(promo.amount)}**`,
         `Использований: **${promo.usesCount}${
           promo.maxUses ? ` / ${promo.maxUses}` : ""
         }**`,
-        `Выдано всего: **${formatMoney(totalIssued)}**`,
+        `Выдано всего: **${money(totalIssued)}**`,
         `Статус: **${promo.isActive ? "Активен" : "Выключен"}**`,
       ]
         .filter(Boolean)
@@ -3455,12 +3174,12 @@ async function showPromoStats(interaction) {
     })
     .join("\n\n");
 
-  const embed = createBaseEmbed(LS_THEME.gold)
+  const e = embed(LS_THEME.gold)
     .setTitle("📊 Статистика промокодов")
-    .setDescription(text);
+    .setDescription(text.slice(0, 4000));
 
   return interaction.reply({
-    embeds: [embed],
+    embeds: [e],
     ephemeral: true,
   });
 }
@@ -3513,24 +3232,24 @@ async function showReferralStats(interaction) {
       return [
         `🤝 **${promo.code}**`,
         `Владелец: ${owner ? `<@${owner.discordId}>` : "Не найден"}`,
-        `Бонус новому игроку: **${formatMoney(promo.amount)}**`,
+        `Бонус новому игроку: **${money(promo.amount)}**`,
         `Процент: **${promo.refPercent || 5}%**`,
         `Активаций: **${promo.usesCount}${
           promo.maxUses ? ` / ${promo.maxUses}` : ""
         }**`,
         `Рефералов у владельца: **${referralsCount}**`,
-        `Пополнений рефералов: **${formatMoney(totalTopups)}**`,
-        `Заработано владельцем: **${formatMoney(totalEarned)}**`,
+        `Пополнений рефералов: **${money(totalTopups)}**`,
+        `Заработано владельцем: **${money(totalEarned)}**`,
       ].join("\n");
     })
     .join("\n\n");
 
-  const embed = createBaseEmbed(LS_THEME.gold)
+  const e = embed(LS_THEME.gold)
     .setTitle("📈 Статистика рефералов")
-    .setDescription(text);
+    .setDescription(text.slice(0, 4000));
 
   return interaction.reply({
-    embeds: [embed],
+    embeds: [e],
     ephemeral: true,
   });
 }
@@ -3557,7 +3276,7 @@ async function activatePromoCode(interaction, codeRaw) {
   }
 
   const code = codeRaw.trim().toUpperCase();
-  const user = await getOrCreateUser(interaction.user);
+  const user = await userOf(interaction.user);
 
   const promo = await prisma.promoCode.findUnique({
     where: {
@@ -3674,54 +3393,570 @@ async function activatePromoCode(interaction, codeRaw) {
     });
   });
 
-  await sendLog(
-    promo.type === "REFERRAL" ? "REFERRAL_PROMO_ACTIVATED" : "PROMO_ACTIVATED",
-    promo.type === "REFERRAL"
-      ? "🤝 Реферальный промокод активирован"
-      : "🎟️ Промокод активирован",
-    `Игрок <@${interaction.user.id}> активировал промокод **${promo.code}**.`,
-    [
-      {
-        name: "Бонус игроку",
-        value: formatMoney(promo.amount),
-        inline: true,
-      },
-      {
-        name: "Код",
-        value: promo.code,
-        inline: true,
-      },
-      {
-        name: "Тип",
-        value: promo.type === "REFERRAL" ? "Реферальный" : "Обычный",
-        inline: true,
-      },
-      ...(promo.type === "REFERRAL" && promo.owner
-        ? [
-            {
-              name: "Реферер",
-              value: `<@${promo.owner.discordId}>`,
-              inline: true,
-            },
-            {
-              name: "Процент",
-              value: `${promo.refPercent || 5}%`,
-              inline: true,
-            },
-          ]
-        : []),
-    ]
-  );
-
   return interaction.reply({
     content:
       promo.type === "REFERRAL"
-        ? `✅ Реферальный промокод **${promo.code}** активирован.\nТы получил **${formatMoney(
+        ? `✅ Реферальный промокод **${promo.code}** активирован.\nТы получил **${money(
             promo.amount
           )}**.\nТвой реферер: <@${promo.owner.discordId}>.`
-        : `✅ Промокод **${promo.code}** активирован. Начислено **${formatMoney(
+        : `✅ Промокод **${promo.code}** активирован. Начислено **${money(
             promo.amount
           )}**.`,
+    ephemeral: true,
+  });
+}
+
+function numbersToString(numbers) {
+  return numbers.join(",");
+}
+
+function stringToNumbers(value) {
+  return String(value || "")
+    .split(",")
+    .map((n) => Number(n.trim()))
+    .filter((n) => Number.isInteger(n));
+}
+
+function formatLotteryNumbers(value) {
+  const numbers = Array.isArray(value) ? value : stringToNumbers(value);
+  return numbers.map((n) => `**${n}**`).join(" • ");
+}
+
+function generateLotteryNumbers() {
+  const numbers = [];
+
+  while (numbers.length < LOTTERY_NUMBERS_COUNT) {
+    const number =
+      Math.floor(Math.random() * (LOTTERY_MAX_NUMBER - LOTTERY_MIN_NUMBER + 1)) +
+      LOTTERY_MIN_NUMBER;
+
+    if (!numbers.includes(number)) {
+      numbers.push(number);
+    }
+  }
+
+  return numbers.sort((a, b) => a - b);
+}
+
+function parseLotteryNumbers(raw) {
+  const numbers = String(raw || "")
+    .replace(/[;,]/g, " ")
+    .split(/\s+/)
+    .map((n) => Number(n.trim()))
+    .filter((n) => Number.isInteger(n));
+
+  const unique = [...new Set(numbers)].sort((a, b) => a - b);
+
+  if (unique.length !== LOTTERY_NUMBERS_COUNT) {
+    return {
+      ok: false,
+      error: `Нужно указать ровно ${LOTTERY_NUMBERS_COUNT} разных чисел.`,
+    };
+  }
+
+  const invalid = unique.find(
+    (n) => n < LOTTERY_MIN_NUMBER || n > LOTTERY_MAX_NUMBER
+  );
+
+  if (invalid) {
+    return {
+      ok: false,
+      error: `Числа должны быть от ${LOTTERY_MIN_NUMBER} до ${LOTTERY_MAX_NUMBER}.`,
+    };
+  }
+
+  return {
+    ok: true,
+    numbers: unique,
+  };
+}
+
+function calculateLotteryPrize(matches, price) {
+  if (matches === 5) return price * 25;
+  if (matches === 4) return price * 5;
+  if (matches === 3) return price * 2;
+  return 0;
+}
+
+function countMatches(ticketNumbers, resultNumbers) {
+  return ticketNumbers.filter((n) => resultNumbers.includes(n)).length;
+}
+
+function lotteryPanel() {
+  const e = embed(LS_THEME.gold)
+    .setTitle("🎫 LS BET LOTTERY")
+    .setDescription(
+      [
+        "```",
+        "5 NUMBERS LOTTERY",
+        "```",
+        `Выбери **${LOTTERY_NUMBERS_COUNT} чисел** от **${LOTTERY_MIN_NUMBER}** до **${LOTTERY_MAX_NUMBER}**.`,
+        `Цена билета: **${money(LOTTERY_TICKET_PRICE)}**`,
+        "",
+        "**Выплаты:**",
+        `5 совпадений — x25 = **${money(LOTTERY_TICKET_PRICE * 25)}**`,
+        `4 совпадения — x5 = **${money(LOTTERY_TICKET_PRICE * 5)}**`,
+        `3 совпадения — x2 = **${money(LOTTERY_TICKET_PRICE * 2)}**`,
+        `0-2 совпадения — без выигрыша`,
+        "",
+        `Максимум активных билетов на игрока: **${LOTTERY_MAX_TICKETS_PER_DRAW}**`,
+        LS_TEXT.line,
+      ].join("\n")
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("lottery_random")
+      .setLabel("🎲 Случайный билет")
+      .setStyle(ButtonStyle.Success),
+
+    new ButtonBuilder()
+      .setCustomId("lottery_custom")
+      .setLabel("✍️ Свои числа")
+      .setStyle(ButtonStyle.Primary),
+
+    new ButtonBuilder()
+      .setCustomId("lottery_mine")
+      .setLabel("🧾 Мои билеты")
+      .setStyle(ButtonStyle.Secondary),
+
+    new ButtonBuilder()
+      .setCustomId("lottery_last")
+      .setLabel("🏆 Последний розыгрыш")
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  return {
+    embeds: [e],
+    components: [row],
+    ephemeral: true,
+  };
+}
+
+function lotteryCustomModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("lottery_custom_modal")
+    .setTitle("LS Bet Lottery — свои числа");
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("numbers")
+        .setLabel("Введи 5 чисел от 1 до 36")
+        .setPlaceholder("Например: 5 12 18 24 33")
+        .setRequired(true)
+        .setStyle(TextInputStyle.Short)
+    )
+  );
+
+  return modal;
+}
+
+async function buyLotteryTicket(interaction, numbers) {
+  const user = await userOf(interaction.user);
+
+  const activeCount = await prisma.lotteryTicket.count({
+    where: {
+      userId: user.id,
+      status: "ACTIVE",
+    },
+  });
+
+  if (activeCount >= LOTTERY_MAX_TICKETS_PER_DRAW) {
+    return interaction.reply({
+      content: `⛔ У тебя уже максимум активных билетов: **${LOTTERY_MAX_TICKETS_PER_DRAW}**.`,
+      ephemeral: true,
+    });
+  }
+
+  if (user.balance < LOTTERY_TICKET_PRICE) {
+    return interaction.reply({
+      content: `Недостаточно средств. Твой баланс: **${money(user.balance)}**.`,
+      ephemeral: true,
+    });
+  }
+
+  const ticket = await prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: {
+        id: user.id,
+      },
+      data: {
+        balance: {
+          decrement: LOTTERY_TICKET_PRICE,
+        },
+      },
+    });
+
+    const createdTicket = await tx.lotteryTicket.create({
+      data: {
+        userId: user.id,
+        numbers: numbersToString(numbers),
+        price: LOTTERY_TICKET_PRICE,
+        status: "ACTIVE",
+      },
+    });
+
+    await tx.transaction.create({
+      data: {
+        userId: user.id,
+        amount: -LOTTERY_TICKET_PRICE,
+        type: "LOTTERY_TICKET",
+        comment: `Покупка билета лотереи #${createdTicket.id}. Числа: ${numbers.join(
+          ", "
+        )}`,
+      },
+    });
+
+    return createdTicket;
+  });
+
+  return interaction.reply({
+    content:
+      `✅ **Билет куплен**\n\n` +
+      `Билет: **#${ticket.id}**\n` +
+      `Числа: ${formatLotteryNumbers(numbers)}\n` +
+      `Цена: **${money(LOTTERY_TICKET_PRICE)}**\n\n` +
+      `Ожидай ближайший розыгрыш.`,
+    ephemeral: true,
+  });
+}
+
+async function showMyLotteryTickets(interaction) {
+  const user = await userOf(interaction.user);
+
+  const tickets = await prisma.lotteryTicket.findMany({
+    where: {
+      userId: user.id,
+    },
+    orderBy: {
+      id: "desc",
+    },
+    take: 10,
+  });
+
+  if (tickets.length === 0) {
+    return interaction.reply({
+      content: "У тебя пока нет билетов лотереи.",
+      ephemeral: true,
+    });
+  }
+
+  const text = tickets
+    .map((ticket) => {
+      const status =
+        ticket.status === "ACTIVE"
+          ? "🟢 Активен"
+          : ticket.prize > 0
+          ? "✅ Выигрыш"
+          : "❌ Без выигрыша";
+
+      return [
+        `**Билет #${ticket.id}**`,
+        `Числа: ${formatLotteryNumbers(ticket.numbers)}`,
+        `Статус: ${status}`,
+        ticket.status !== "ACTIVE"
+          ? `Совпадений: **${ticket.matches}**`
+          : null,
+        ticket.status !== "ACTIVE"
+          ? `Результат: ${formatLotteryNumbers(ticket.resultNumbers)}`
+          : null,
+        ticket.prize > 0 ? `Выигрыш: **${money(ticket.prize)}**` : null,
+        `Дата: <t:${unix(ticket.createdAt)}:R>`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    })
+    .join("\n\n");
+
+  const e = embed(LS_THEME.gold)
+    .setTitle("🧾 Мои билеты лотереи")
+    .setDescription(text.slice(0, 4000));
+
+  return interaction.reply({
+    embeds: [e],
+    ephemeral: true,
+  });
+}
+
+async function showLastLotteryDraw(interaction, adminView = false) {
+  const draw = await prisma.lotteryDraw.findFirst({
+    orderBy: {
+      id: "desc",
+    },
+    include: {
+      tickets: {
+        include: {
+          user: true,
+        },
+      },
+    },
+  });
+
+  if (!draw) {
+    return interaction.reply({
+      content: "Розыгрышей ещё не было.",
+      ephemeral: true,
+    });
+  }
+
+  const winners = draw.tickets.filter((ticket) => ticket.prize > 0);
+  const totalPaid = winners.reduce((sum, ticket) => sum + ticket.prize, 0);
+
+  const winnersText =
+    winners.length === 0
+      ? "Победителей в этом розыгрыше нет."
+      : winners
+          .sort((a, b) => b.prize - a.prize)
+          .slice(0, 10)
+          .map((ticket) => {
+            return `<@${ticket.user.discordId}> — **${ticket.matches} совп.** — **${money(
+              ticket.prize
+            )}**`;
+          })
+          .join("\n");
+
+  const e = embed(LS_THEME.gold)
+    .setTitle(`🏆 Последний розыгрыш LS Lottery #${draw.id}`)
+    .setDescription(
+      [
+        `**Выигрышные числа:** ${formatLotteryNumbers(draw.numbers)}`,
+        `**Билетов участвовало:** ${draw.tickets.length}`,
+        `**Победителей:** ${winners.length}`,
+        `**Выплачено:** ${money(totalPaid)}`,
+        "",
+        "**Победители:**",
+        winnersText,
+      ].join("\n")
+    );
+
+  return interaction.reply({
+    embeds: [e],
+    ephemeral: !adminView,
+  });
+}
+
+function adminLotteryPanel() {
+  const e = embed(LS_THEME.gold)
+    .setTitle("🎫 LS Bet — Админ лотерея")
+    .setDescription(
+      [
+        "```",
+        "LOTTERY CONTROL",
+        "```",
+        "Здесь можно провести розыгрыш и посмотреть активные билеты.",
+        "",
+        `Канал результатов: <#${LOTTERY_CHANNEL_ID}>`,
+        LS_TEXT.line,
+      ].join("\n")
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("lottery_draw")
+      .setLabel("🎲 Провести розыгрыш")
+      .setStyle(ButtonStyle.Success),
+
+    new ButtonBuilder()
+      .setCustomId("lottery_active")
+      .setLabel("📊 Активные билеты")
+      .setStyle(ButtonStyle.Secondary),
+
+    new ButtonBuilder()
+      .setCustomId("lottery_last_admin")
+      .setLabel("🏆 Последний розыгрыш")
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  return {
+    embeds: [e],
+    components: [row],
+    ephemeral: true,
+  };
+}
+
+async function showActiveLotteryTickets(interaction) {
+  if (await adminOnly(interaction)) return;
+
+  const tickets = await prisma.lotteryTicket.findMany({
+    where: {
+      status: "ACTIVE",
+    },
+    orderBy: {
+      id: "asc",
+    },
+    take: 25,
+    include: {
+      user: true,
+    },
+  });
+
+  if (tickets.length === 0) {
+    return interaction.reply({
+      content: "Активных билетов сейчас нет.",
+      ephemeral: true,
+    });
+  }
+
+  const text = tickets
+    .map((ticket) => {
+      return `#${ticket.id} — <@${ticket.user.discordId}> — ${formatLotteryNumbers(
+        ticket.numbers
+      )}`;
+    })
+    .join("\n");
+
+  const e = embed(LS_THEME.gold)
+    .setTitle("📊 Активные билеты лотереи")
+    .setDescription(text.slice(0, 4000));
+
+  return interaction.reply({
+    embeds: [e],
+    ephemeral: true,
+  });
+}
+
+async function runLotteryDraw(interaction) {
+  if (await adminOnly(interaction)) return;
+
+  const tickets = await prisma.lotteryTicket.findMany({
+    where: {
+      status: "ACTIVE",
+    },
+    include: {
+      user: true,
+    },
+  });
+
+  if (tickets.length === 0) {
+    return interaction.reply({
+      content: "Активных билетов для розыгрыша нет.",
+      ephemeral: true,
+    });
+  }
+
+  const resultNumbers = generateLotteryNumbers();
+  const resultNumbersString = numbersToString(resultNumbers);
+
+  let winnersCount = 0;
+  let totalPaid = 0;
+
+  const draw = await prisma.$transaction(async (tx) => {
+    const createdDraw = await tx.lotteryDraw.create({
+      data: {
+        numbers: resultNumbersString,
+      },
+    });
+
+    for (const ticket of tickets) {
+      const ticketNumbers = stringToNumbers(ticket.numbers);
+      const matches = countMatches(ticketNumbers, resultNumbers);
+      const prize = calculateLotteryPrize(matches, ticket.price);
+
+      if (prize > 0) {
+        winnersCount++;
+        totalPaid += prize;
+
+        await tx.user.update({
+          where: {
+            id: ticket.userId,
+          },
+          data: {
+            balance: {
+              increment: prize,
+            },
+          },
+        });
+
+        await tx.transaction.create({
+          data: {
+            userId: ticket.userId,
+            amount: prize,
+            type: "LOTTERY_WIN",
+            comment: `Выигрыш по билету лотереи #${ticket.id}. Совпадений: ${matches}`,
+          },
+        });
+      }
+
+      await tx.lotteryTicket.update({
+        where: {
+          id: ticket.id,
+        },
+        data: {
+          status: "FINISHED",
+          drawId: createdDraw.id,
+          resultNumbers: resultNumbersString,
+          matches,
+          prize,
+        },
+      });
+    }
+
+    return createdDraw;
+  });
+
+  const finishedTickets = await prisma.lotteryTicket.findMany({
+    where: {
+      drawId: draw.id,
+    },
+    include: {
+      user: true,
+    },
+  });
+
+  const winners = finishedTickets
+    .filter((ticket) => ticket.prize > 0)
+    .sort((a, b) => b.prize - a.prize);
+
+  const winnersText =
+    winners.length === 0
+      ? "Победителей нет."
+      : winners
+          .slice(0, 10)
+          .map((ticket) => {
+            return `<@${ticket.user.discordId}> — **${ticket.matches} совп.** — **${money(
+              ticket.prize
+            )}**`;
+          })
+          .join("\n");
+
+  const resultEmbed = embed(LS_THEME.gold)
+    .setTitle(`🏆 LS BET LOTTERY RESULT #${draw.id}`)
+    .setDescription(
+      [
+        "```",
+        "5 NUMBERS DRAW",
+        "```",
+        `**Выигрышные числа:** ${formatLotteryNumbers(resultNumbers)}`,
+        "",
+        `**Билетов участвовало:** ${tickets.length}`,
+        `**Победителей:** ${winnersCount}`,
+        `**Выплачено всего:** ${money(totalPaid)}`,
+        "",
+        "**Победители:**",
+        winnersText,
+      ].join("\n")
+    );
+
+  const lotteryChannel = await client.channels
+    .fetch(LOTTERY_CHANNEL_ID)
+    .catch(() => null);
+
+  if (lotteryChannel?.isTextBased()) {
+    await lotteryChannel.send({
+      content: "🏆 **Итоги лотереи LS BET**",
+      embeds: [resultEmbed],
+    });
+  }
+
+  return interaction.reply({
+    content:
+      `✅ Розыгрыш проведён.\n` +
+      `Результат: ${formatLotteryNumbers(resultNumbers)}\n` +
+      `Билетов: **${tickets.length}**\n` +
+      `Победителей: **${winnersCount}**\n` +
+      `Выплачено: **${money(totalPaid)}**\n` +
+      `Итоги опубликованы в <#${LOTTERY_CHANNEL_ID}>.`,
     ephemeral: true,
   });
 }
@@ -3778,29 +4013,6 @@ client.on(Events.MessageCreate, async (message) => {
       "✅ Скриншот получен. Заявка отправлена модераторам на проверку."
     );
 
-    await sendLog(
-      "TOPUP_SCREENSHOT",
-      "📎 Скриншот пополнения загружен",
-      `Игрок <@${request.user.discordId}> загрузил скриншот для заявки #${request.id}.`,
-      [
-        {
-          name: "Сумма",
-          value: formatMoney(request.amount),
-          inline: true,
-        },
-        {
-          name: "Логин",
-          value: request.login,
-          inline: true,
-        },
-        {
-          name: "Ticket",
-          value: `<#${message.channelId}>`,
-          inline: true,
-        },
-      ]
-    );
-
     await sendTopUpModerationLog(request.id);
   } catch (error) {
     console.error("Ошибка обработки скриншота:", error);
@@ -3812,12 +4024,48 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "panel") {
         if (await adminOnly(interaction)) return;
-        return interaction.reply(buildMainPanel());
+        return interaction.reply(mainPanel());
       }
 
       if (interaction.commandName === "admin_panel") {
         if (await adminOnly(interaction)) return;
-        return interaction.reply(buildAdminPanel());
+        return interaction.reply(adminPanel());
+      }
+
+      if (interaction.commandName === "user_info") {
+        if (await adminOnly(interaction)) return;
+
+        await interaction.deferReply({
+          ephemeral: true,
+        });
+
+        const targetDiscordUser = interaction.options.getUser("user");
+
+        return showUserInfo(interaction, targetDiscordUser);
+      }
+
+      if (interaction.commandName === "set_balance") {
+        if (await adminOnly(interaction)) return;
+
+        const targetDiscordUser = interaction.options.getUser("user");
+        const amount = interaction.options.getInteger("amount");
+
+        return setUserBalance(interaction, targetDiscordUser, amount);
+      }
+
+      if (interaction.commandName === "remove_balance") {
+        if (await adminOnly(interaction)) return;
+
+        const targetDiscordUser = interaction.options.getUser("user");
+        const amount = interaction.options.getInteger("amount");
+
+        return removeUserBalance(interaction, targetDiscordUser, amount);
+      }
+
+      if (interaction.commandName === "admin_users") {
+        if (await adminOnly(interaction)) return;
+
+        return showAdminUsers(interaction);
       }
 
       if (interaction.commandName === "event_create") {
@@ -3903,8 +4151,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const message = await eventChannel.send({
           content: "📢 **LS Bet афиша события**",
-          embeds: buildEventPoster(event),
-          components: buildEventButtons(event),
+          embeds: eventEmbeds(event),
+          components: eventButtons(event),
         });
 
         await prisma.rpEvent.update({
@@ -3916,34 +4164,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             channelId: EVENT_CHANNEL_ID,
           },
         });
-
-        await sendLog(
-          "EVENT_CREATED",
-          "📢 Создано событие LS Bet",
-          `Модератор <@${interaction.user.id}> создал событие **#${event.id} ${event.title}**.`,
-          [
-            {
-              name: "Исход 1",
-              value: `${option1} x${odds1}`,
-              inline: true,
-            },
-            {
-              name: "Исход 2",
-              value: `${option2} x${odds2}`,
-              inline: true,
-            },
-            {
-              name: "Закрытие ставок",
-              value: `<t:${getUnixTime(closesAt)}:R>`,
-              inline: true,
-            },
-            {
-              name: "Канал публикации",
-              value: `<#${EVENT_CHANNEL_ID}>`,
-              inline: true,
-            },
-          ]
-        );
 
         return interaction.reply({
           content: `✅ Событие создано и опубликовано в канале <#${EVENT_CHANNEL_ID}>.`,
@@ -3973,7 +4193,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        const targetUser = await getOrCreateUser(targetDiscordUser);
+        const targetUser = await userOf(targetDiscordUser);
 
         await prisma.$transaction([
           prisma.user.update({
@@ -3997,21 +4217,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }),
         ]);
 
-        await sendLog(
-          "ADMIN_ADD_BALANCE",
-          "💵 Ручное начисление баланса",
-          `Модератор <@${interaction.user.id}> начислил баланс игроку <@${targetDiscordUser.id}>.`,
-          [
-            {
-              name: "Сумма",
-              value: formatMoney(amount),
-              inline: true,
-            },
-          ]
-        );
-
         return interaction.reply({
-          content: `✅ <@${targetDiscordUser.id}> начислено **${formatMoney(amount)}**.`,
+          content: `✅ <@${targetDiscordUser.id}> начислено **${money(amount)}**.`,
         });
       }
     }
@@ -4031,17 +4238,43 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.customId === "admin_promos") {
         if (await adminOnly(interaction)) return;
-        return interaction.reply(buildAdminPromoPanel());
+        return interaction.reply(adminPromoPanel());
+      }
+
+      if (interaction.customId === "admin_lottery") {
+        if (await adminOnly(interaction)) return;
+        return interaction.reply(adminLotteryPanel());
+      }
+
+      if (interaction.customId === "admin_public_panel") {
+        if (await adminOnly(interaction)) return;
+
+        await interaction.channel.send(mainPanel());
+
+        return interaction.reply({
+          content: "✅ Главное меню опубликовано.",
+          ephemeral: true,
+        });
       }
 
       if (interaction.customId === "promo_create") {
         if (await adminOnly(interaction)) return;
-        return interaction.showModal(buildPromoCreateModal());
+        return interaction.showModal(promoCreateModal());
       }
 
       if (interaction.customId === "promo_create_referral") {
         if (await adminOnly(interaction)) return;
-        return interaction.showModal(buildReferralPromoCreateModal());
+        return interaction.showModal(referralPromoCreateModal());
+      }
+
+      if (interaction.customId === "promo_edit") {
+        if (await adminOnly(interaction)) return;
+        return interaction.showModal(promoEditModal());
+      }
+
+      if (interaction.customId === "promo_delete") {
+        if (await adminOnly(interaction)) return;
+        return interaction.showModal(promoDeleteModal());
       }
 
       if (interaction.customId === "promo_stats") {
@@ -4052,15 +4285,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return showReferralStats(interaction);
       }
 
-      if (interaction.customId === "admin_public_panel") {
+      if (interaction.customId === "lottery_draw") {
+        return runLotteryDraw(interaction);
+      }
+
+      if (interaction.customId === "lottery_active") {
+        return showActiveLotteryTickets(interaction);
+      }
+
+      if (interaction.customId === "lottery_last_admin") {
         if (await adminOnly(interaction)) return;
-
-        await interaction.channel.send(buildMainPanel());
-
-        return interaction.reply({
-          content: "✅ Главное меню опубликовано.",
-          ephemeral: true,
-        });
+        return showLastLotteryDraw(interaction, true);
       }
 
       if (interaction.customId.startsWith("admin_live:")) {
@@ -4070,6 +4305,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.customId.startsWith("admin_finish:")) {
         const [, eventIdRaw, winnerRaw] = interaction.customId.split(":");
+
         return adminFinishEvent(
           interaction,
           Number(eventIdRaw),
@@ -4142,15 +4378,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (interaction.customId === "panel_promo") {
-        return interaction.showModal(buildPromoModal());
+        return interaction.showModal(promoModal());
       }
 
       if (interaction.customId === "panel_topup") {
-        return interaction.showModal(buildTopUpModal());
+        return interaction.showModal(topupModal());
       }
 
       if (interaction.customId === "panel_withdraw") {
-        return interaction.showModal(buildWithdrawModal());
+        return interaction.showModal(withdrawModal());
       }
 
       if (interaction.customId === "panel_coinflip") {
@@ -4161,12 +4397,32 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        return interaction.reply(buildCoinflipStartPanel());
+        return interaction.reply(coinflipPanel());
+      }
+
+      if (interaction.customId === "panel_lottery") {
+        return interaction.reply(lotteryPanel());
+      }
+
+      if (interaction.customId === "lottery_random") {
+        return buyLotteryTicket(interaction, generateLotteryNumbers());
+      }
+
+      if (interaction.customId === "lottery_custom") {
+        return interaction.showModal(lotteryCustomModal());
+      }
+
+      if (interaction.customId === "lottery_mine") {
+        return showMyLotteryTickets(interaction);
+      }
+
+      if (interaction.customId === "lottery_last") {
+        return showLastLotteryDraw(interaction);
       }
 
       if (interaction.customId.startsWith("coinflip_side:")) {
         const [, side] = interaction.customId.split(":");
-        return interaction.showModal(buildCoinflipAmountModal(side));
+        return interaction.showModal(coinflipAmountModal(side));
       }
 
       if (interaction.customId.startsWith("coinflip_accept:")) {
@@ -4228,25 +4484,42 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setCustomId(`bet_modal:${eventId}:${optionId}`)
           .setTitle("LS Bet — сумма ставки");
 
-        const amountInput = new TextInputBuilder()
-          .setCustomId("amount")
-          .setLabel("Сумма ставки в $")
-          .setPlaceholder("Например: 500")
-          .setRequired(true)
-          .setStyle(TextInputStyle.Short);
-
-        modal.addComponents(new ActionRowBuilder().addComponents(amountInput));
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("amount")
+              .setLabel("Сумма ставки в $")
+              .setPlaceholder("Например: 500")
+              .setRequired(true)
+              .setStyle(TextInputStyle.Short)
+          )
+        );
 
         return interaction.showModal(modal);
       }
     }
 
     if (interaction.isModalSubmit()) {
-      if (interaction.customId.startsWith("coinflip_modal:")) {
-        const [, side] = interaction.customId.split(":");
-        const amount = Number(interaction.fields.getTextInputValue("amount"));
+      if (interaction.customId === "promo_edit_modal") {
+        const code = interaction.fields.getTextInputValue("code");
+        const amount = interaction.fields.getTextInputValue("amount");
+        const maxUses = interaction.fields.getTextInputValue("maxUses");
+        const active = interaction.fields.getTextInputValue("active");
+        const referral = interaction.fields.getTextInputValue("referral");
 
-        return createCoinflipGame(interaction, side, amount);
+        return editPromoCode(
+          interaction,
+          code,
+          amount,
+          maxUses,
+          active,
+          referral
+        );
+      }
+
+      if (interaction.customId === "promo_delete_modal") {
+        const code = interaction.fields.getTextInputValue("code");
+        return deletePromoCode(interaction, code);
       }
 
       if (interaction.customId === "promo_create_modal") {
@@ -4280,6 +4553,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return activatePromoCode(interaction, code);
       }
 
+      if (interaction.customId === "lottery_custom_modal") {
+        const raw = interaction.fields.getTextInputValue("numbers");
+        const parsed = parseLotteryNumbers(raw);
+
+        if (!parsed.ok) {
+          return interaction.reply({
+            content: `❌ ${parsed.error}`,
+            ephemeral: true,
+          });
+        }
+
+        return buyLotteryTicket(interaction, parsed.numbers);
+      }
+
+      if (interaction.customId.startsWith("coinflip_modal:")) {
+        const [, side] = interaction.customId.split(":");
+        const amount = Number(interaction.fields.getTextInputValue("amount"));
+
+        return createCoinflipGame(interaction, side, amount);
+      }
+
       if (interaction.customId === "topup_modal") {
         const login = interaction.fields.getTextInputValue("login");
         const amount = Number(interaction.fields.getTextInputValue("amount"));
@@ -4301,7 +4595,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const details = interaction.fields.getTextInputValue("details");
         const comment = interaction.fields.getTextInputValue("comment");
 
-        return createWithdrawTicket(interaction, login, amount, details, comment);
+        return createWithdrawTicket(
+          interaction,
+          login,
+          amount,
+          details,
+          comment
+        );
       }
 
       if (!interaction.customId.startsWith("bet_modal:")) return;
@@ -4319,7 +4619,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
       }
 
-      const user = await getOrCreateUser(interaction.user);
+      const user = await userOf(interaction.user);
 
       const event = await prisma.rpEvent.findUnique({
         where: {
@@ -4357,7 +4657,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (user.balance < amount) {
         return interaction.reply({
-          content: `Недостаточно средств. Твой баланс: **${formatMoney(user.balance)}**.`,
+          content: `Недостаточно средств. Твой баланс: **${money(
+            user.balance
+          )}**.`,
           ephemeral: true,
         });
       }
@@ -4394,60 +4696,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
             type: "EVENT_BET",
             comment: `Ставка на событие "${event.title}". Исход: ${
               option.title
-            }. Возможный выигрыш: ${formatMoney(potentialWin)}`,
+            }. Возможный выигрыш: ${money(potentialWin)}`,
           },
         }),
       ]);
 
       await updateEventMessage(eventId);
 
-      await sendLog(
-        "BET_CREATED",
-        "💵 Новая ставка",
-        `Игрок <@${interaction.user.id}> сделал ставку.`,
-        [
-          {
-            name: "Событие",
-            value: event.title,
-            inline: true,
-          },
-          {
-            name: "Исход",
-            value: option.title,
-            inline: true,
-          },
-          {
-            name: "Сумма",
-            value: formatMoney(amount),
-            inline: true,
-          },
-          {
-            name: "Возможный выигрыш",
-            value: formatMoney(potentialWin),
-            inline: true,
-          },
-        ]
-      );
-
       return interaction.reply({
         content:
           `✅ **Ставка принята**\n` +
           `Событие: **${event.title}**\n` +
           `Исход: **${option.title}**\n` +
-          `Сумма: **${formatMoney(amount)}**\n` +
+          `Сумма: **${money(amount)}**\n` +
           `Коэффициент: **x${option.odds}**\n` +
-          `Возможный выигрыш: **${formatMoney(potentialWin)}**`,
+          `Возможный выигрыш: **${money(potentialWin)}**`,
         ephemeral: true,
       });
     }
   } catch (error) {
     console.error(error);
-
-    await sendLog(
-      "BOT_ERROR",
-      "⚠️ Ошибка бота",
-      `\`\`\`${String(error.message || error).slice(0, 1500)}\`\`\``
-    );
 
     if (interaction.replied || interaction.deferred) {
       return interaction.followUp({
