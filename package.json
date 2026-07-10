@@ -4,7 +4,6 @@
   "description": "LS Bet Discord bot",
   "main": "index.js",
   "scripts": {
-<<<<<<< HEAD
     "start": "npm run db:deploy && node index.js",
     "dev": "nodemon index.js",
     "commands": "node deploy-commands.js",
@@ -13,12 +12,6 @@
     "migration:clients": "npx prisma generate --schema=prisma/schema.prisma && npx prisma generate --schema=prisma/sqlite.schema.prisma",
     "migration:run": "npm run migration:clients && node scripts/migrate-sqlite-to-postgres.js",
     "migration:verify": "npm run migration:clients && node scripts/verify-postgres-migration.js",
-=======
-    "start": "npm run db && node index.js",
-    "dev": "nodemon index.js",
-    "commands": "node deploy-commands.js",
-    "db": "npx prisma generate --schema=prisma/schema.prisma && npx prisma db push --schema=prisma/schema.prisma",
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
     "postinstall": "npx prisma generate --schema=prisma/schema.prisma"
   },
   "keywords": [],
@@ -33,8 +26,4 @@
   "devDependencies": {
     "nodemon": "^3.1.10"
   }
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
