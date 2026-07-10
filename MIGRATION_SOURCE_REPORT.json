@@ -1,0 +1,84 @@
+{
+  "source_database": "prisma/dev.db",
+  "foreign_key_issues": 0,
+  "tables": {
+    "Bet": {
+      "count": 75,
+      "sum_amount": 511026,
+      "sum_potentialWin": 1083133
+    },
+    "BotLog": {
+      "count": 7547
+    },
+    "CoinflipGame": {
+      "count": 50,
+      "sum_amount": 212753
+    },
+    "CrashBet": {
+      "count": 48,
+      "sum_amount": 17800,
+      "sum_payout": 9329
+    },
+    "CrashRound": {
+      "count": 7029
+    },
+    "EventOption": {
+      "count": 118
+    },
+    "JackpotContribution": {
+      "count": 120,
+      "sum_amount": 26178
+    },
+    "JackpotWar": {
+      "count": 1,
+      "sum_currentPool": 26178,
+      "sum_targetPool": 200000
+    },
+    "LotteryDraw": {
+      "count": 9
+    },
+    "LotteryTicket": {
+      "count": 25,
+      "sum_price": 25000,
+      "sum_prize": 0
+    },
+    "PromoActivation": {
+      "count": 15,
+      "sum_amount": 3240
+    },
+    "PromoCode": {
+      "count": 7,
+      "sum_amount": 2610,
+      "sum_usesCount": 15
+    },
+    "ReferralReward": {
+      "count": 2,
+      "sum_amount": 5050,
+      "sum_sourceAmount": 101000
+    },
+    "RegistrationRequest": {
+      "count": 13
+    },
+    "RpEvent": {
+      "count": 44
+    },
+    "TopUpRequest": {
+      "count": 24,
+      "sum_amount": 100000686703
+    },
+    "Transaction": {
+      "count": 543,
+      "sum_amount": 56172
+    },
+    "User": {
+      "count": 43,
+      "sum_balance": 62472
+    },
+    "WithdrawRequest": {
+      "count": 6,
+      "sum_amount": 411437,
+      "sum_commission": 20571,
+      "sum_payoutAmount": 390866
+    }
+  }
+}

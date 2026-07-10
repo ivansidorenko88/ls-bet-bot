@@ -1,14 +1,11 @@
 generator client {
   provider = "prisma-client-js"
+  output   = "../generated/sqlite-client"
 }
 
 datasource db {
-<<<<<<< HEAD
-  provider = "postgresql"
-=======
   provider = "sqlite"
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-  url      = env("DATABASE_URL")
+  url      = env("SQLITE_DATABASE_URL")
 }
 
 model User {
@@ -18,7 +15,6 @@ model User {
   balance   Int      @default(0)
   createdAt DateTime @default(now())
 
-<<<<<<< HEAD
   // Registration / verification data
   registrationStatus String?
   registeredFullName String?
@@ -26,8 +22,6 @@ model User {
   registeredAge      Int?
   registeredAt       DateTime?
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
   referredByUserId Int?
   refPercent       Int?
 
@@ -39,13 +33,10 @@ model User {
   topUpRequests    TopUpRequest[]
   withdrawRequests WithdrawRequest[]
   lotteryTickets   LotteryTicket[]
-<<<<<<< HEAD
   crashBets        CrashBet[]
 
   registrationRequests RegistrationRequest[]
   jackpotContributions JackpotContribution[]
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 
   coinflipCreated  CoinflipGame[] @relation("CoinflipCreated")
   coinflipOpponent CoinflipGame[] @relation("CoinflipOpponent")
@@ -58,7 +49,6 @@ model User {
   referralRewardsGiven    ReferralReward[] @relation("ReferralRewardReferred")
 }
 
-<<<<<<< HEAD
 model RegistrationRequest {
   id              Int       @id @default(autoincrement())
   userId          Int
@@ -76,8 +66,6 @@ model RegistrationRequest {
   user User @relation(fields: [userId], references: [id])
 }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 model RpEvent {
   id          Int      @id @default(autoincrement())
   title       String
@@ -87,10 +75,7 @@ model RpEvent {
   createdBy   String?
   messageId   String?
   channelId   String?
-<<<<<<< HEAD
   facebrowserPostId String?
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
   createdAt   DateTime @default(now())
 
   options EventOption[]
@@ -233,7 +218,6 @@ model PromoActivation {
 }
 
 model ReferralReward {
-<<<<<<< HEAD
   id           Int      @id @default(autoincrement())
   referrerId   Int
   referredId   Int
@@ -245,19 +229,6 @@ model ReferralReward {
 
   referrer User          @relation("ReferralRewardReferrer", fields: [referrerId], references: [id])
   referred User          @relation("ReferralRewardReferred", fields: [referredId], references: [id])
-=======
-  id          Int      @id @default(autoincrement())
-  referrerId  Int
-  referredId  Int
-  topUpId     Int?
-  amount      Int
-  percent     Int
-  sourceAmount Int
-  createdAt   DateTime @default(now())
-
-  referrer User @relation("ReferralRewardReferrer", fields: [referrerId], references: [id])
-  referred User @relation("ReferralRewardReferred", fields: [referredId], references: [id])
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
   topUp    TopUpRequest? @relation(fields: [topUpId], references: [id])
 }
 
@@ -273,11 +244,7 @@ model LotteryTicket {
   resultNumbers String?
   createdAt     DateTime @default(now())
 
-<<<<<<< HEAD
   user User         @relation(fields: [userId], references: [id])
-=======
-  user User @relation(fields: [userId], references: [id])
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
   draw LotteryDraw? @relation(fields: [drawId], references: [id])
 }
 
@@ -287,7 +254,6 @@ model LotteryDraw {
   createdAt DateTime @default(now())
 
   tickets LotteryTicket[]
-<<<<<<< HEAD
 }
 
 model JackpotWar {
@@ -343,6 +309,3 @@ model CrashBet {
   round CrashRound @relation(fields: [roundId], references: [id])
   user  User       @relation(fields: [userId], references: [id])
 }
-=======
-}
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9

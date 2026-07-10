@@ -1,4 +1,9 @@
 node_modules
 .env
 prisma/dev.db
+<<<<<<< HEAD
 prisma/dev.db-journal
+generated/
+=======
+prisma/dev.db-journal
+>>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
