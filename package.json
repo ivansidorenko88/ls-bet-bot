@@ -12,7 +12,8 @@
     "migration:clients": "npx prisma generate --schema=prisma/schema.prisma && npx prisma generate --schema=prisma/sqlite.schema.prisma",
     "migration:run": "npm run migration:clients && node scripts/migrate-sqlite-to-postgres.js",
     "migration:verify": "npm run migration:clients && node scripts/verify-postgres-migration.js",
-    "postinstall": "npx prisma generate --schema=prisma/schema.prisma"
+    "postinstall": "npx prisma generate --schema=prisma/schema.prisma",
+    "check": "node scripts/preflight.js"
   },
   "keywords": [],
   "author": "LS Bet",
@@ -25,5 +26,8 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.10"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

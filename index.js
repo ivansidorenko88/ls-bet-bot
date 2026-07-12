@@ -1,16 +1,18 @@
 require("dotenv").config();
 
-const { execSync } = require("child_process");
-
-try {
-  console.log("🔧 Prisma generate...");
-  execSync("npx prisma generate --schema=prisma/schema.prisma", { stdio: "inherit" });
-  console.log("🔧 Prisma db push...");
-  execSync("npx prisma db push --schema=prisma/schema.prisma", { stdio: "inherit" });
-  console.log("✅ Prisma ready");
-} catch (error) {
-  console.error("❌ Prisma prepare error:", error.message);
+const requiredRuntimeEnv = ["DISCORD_TOKEN", "DATABASE_URL"];
+const missingRuntimeEnv = requiredRuntimeEnv.filter((name) => !String(process.env[name] || "").trim());
+if (missingRuntimeEnv.length) {
+  console.error(`❌ Не заданы обязательные переменные окружения: ${missingRuntimeEnv.join(", ")}`);
+  process.exit(1);
 }
+
+if (!/^postgres(ql)?:\/\//i.test(process.env.DATABASE_URL)) {
+  console.error("❌ Основной DATABASE_URL должен указывать на PostgreSQL. SQLite разрешён только через SQLITE_DATABASE_URL для миграции.");
+  process.exit(1);
+}
+
+console.log("🗄️ Основная база данных: PostgreSQL");
 
 const {
   Client,
@@ -25,6 +27,7 @@ const {
   TextInputStyle,
   PermissionFlagsBits,
   ChannelType,
+  MessageFlags,
 } = require("discord.js");
 
 const { PrismaClient } = require("@prisma/client");
@@ -39,16 +42,116 @@ const client = new Client({
   ],
 });
 
-<<<<<<< HEAD
+function normalizeInteractionPayload(payload, { forEdit = false } = {}) {
+  if (payload === undefined || payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    return payload;
+  }
+
+  const normalized = { ...payload };
+  const isEphemeral = normalized.ephemeral === true;
+  delete normalized.ephemeral;
+
+  if (forEdit) {
+    // Discord does not allow changing the ephemeral state after acknowledgement.
+    delete normalized.flags;
+  } else if (isEphemeral) {
+    const currentFlags = Number(normalized.flags || 0);
+    normalized.flags = currentFlags | MessageFlags.Ephemeral;
+  }
+
+  return normalized;
+}
+
+async function deferInteractionReply(interaction, payload = {}) {
+  if (interaction.deferred || interaction.replied) return;
+  return interaction.deferReply(normalizeInteractionPayload(payload));
+}
+
+async function respondInteraction(interaction, payload) {
+  if (interaction.deferred) {
+    return interaction.editReply(normalizeInteractionPayload(payload, { forEdit: true }));
+  }
+
+  if (interaction.replied) {
+    return interaction.followUp(normalizeInteractionPayload(payload));
+  }
+
+  return interaction.reply(normalizeInteractionPayload(payload));
+}
+
+async function followUpInteraction(interaction, payload) {
+  if (!interaction.deferred && !interaction.replied) {
+    return respondInteraction(interaction, payload);
+  }
+  return interaction.followUp(normalizeInteractionPayload(payload));
+}
+
+async function safelyHandleInteractionError(interaction, error) {
+  console.error("Ошибка InteractionCreate:", error);
+
+  if (error?.code === 10062) {
+    console.warn("Discord interaction уже истёк; повторный ответ пропущен.");
+    return;
+  }
+
+  const payload = {
+    content: "❌ Произошла ошибка. Попробуйте ещё раз.",
+    ephemeral: true,
+  };
+
+  try {
+    await respondInteraction(interaction, payload);
+  } catch (responseError) {
+    if (responseError?.code !== 10062) {
+      console.error("Не удалось отправить сообщение об ошибке:", responseError);
+    }
+  }
+}
+
+function buttonOpensModal(customId) {
+  const exactIds = new Set([
+    "registration_start",
+    "admin_event_create_button",
+    "admin_event_edit_by_id_button",
+    "admin_user_info_button",
+    "admin_user_add_balance_button",
+    "admin_user_remove_balance_button",
+    "admin_user_set_balance_button",
+    "promo_create",
+    "promo_create_referral",
+    "promo_edit",
+    "promo_delete",
+    "panel_promo",
+    "panel_topup",
+    "panel_withdraw",
+    "lottery_custom",
+  ]);
+
+  if (exactIds.has(customId)) return true;
+
+  return [
+    "admin_event_edit:",
+    "admin_event_cancel:",
+    "crash_bet_auto:",
+    "crash_bet_custom:",
+    "coinflip_side:",
+    "bet:",
+  ].some((prefix) => customId.startsWith(prefix));
+}
+
+function buttonUsesMessageUpdate(customId) {
+  return [
+    "registration_approve:",
+    "registration_reject:",
+    "registration_ticket_close:",
+  ].some((prefix) => customId.startsWith(prefix));
+}
+
 const START_BALANCE = Number(process.env.START_BALANCE ?? process.env.START_POINTS ?? 0);
-=======
-const START_BALANCE = Number(process.env.START_BALANCE || 0);
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 const EVENT_CHANNEL_ID = process.env.EVENT_CHANNEL_ID || "1510916382395600936";
 const RESULT_CHANNEL_ID = process.env.RESULT_CHANNEL_ID || "1510928118527950888";
 const COINFLIP_CHANNEL_ID = process.env.COINFLIP_CHANNEL_ID || "1511707250668863578";
 const LOTTERY_CHANNEL_ID = process.env.LOTTERY_CHANNEL_ID || "1510916530190417990";
-<<<<<<< HEAD
 const REGISTRATION_CHANNEL_ID = process.env.REGISTRATION_CHANNEL_ID || null;
 const REGISTRATION_CATEGORY_ID = process.env.REGISTRATION_CATEGORY_ID || "1514552444552482906";
 const REGISTRATION_ROLE_ID = process.env.REGISTRATION_ROLE_ID || null;
@@ -81,9 +184,6 @@ const FACEBROWSER_API_KEY = process.env.FACEBROWSER_API_KEY || null;
 const FACEBROWSER_PAGE_ID = process.env.FACEBROWSER_PAGE_ID || null;
 const FACEBROWSER_API_BASE = process.env.FACEBROWSER_API_BASE || "https://fbv2-api.gtaw.io/api/v1/page-api";
 const FACEBROWSER_AUTOPOST_EVENTS = String(process.env.FACEBROWSER_AUTOPOST_EVENTS || "false").toLowerCase() === "true";
-=======
-const PROMO_NEW_USER_DAYS = Number(process.env.PROMO_NEW_USER_DAYS || 3);
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 const WITHDRAW_COMMISSION_PERCENT = Number(process.env.WITHDRAW_COMMISSION_PERCENT || 5);
 
 const LOTTERY_TICKET_PRICE = Number(process.env.LOTTERY_TICKET_PRICE || 1000);
@@ -100,11 +200,7 @@ const LS_THEME = {
 };
 
 const LS_TEXT = {
-<<<<<<< HEAD
   footer: "LS Bet • Events • Coinflip • Lottery",
-=======
-  footer: "LS Bet • RP Events • Coinflip • Lottery",
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
   line: "━━━━━━━━━━━━━━━━━━━━",
 };
 
@@ -131,11 +227,10 @@ function isAdmin(interaction) {
 
 async function adminOnly(interaction) {
   if (isAdmin(interaction)) return false;
-  await interaction.reply({ content: "⛔ Эта команда доступна только администрации.", ephemeral: true });
+  await respondInteraction(interaction, { content: "⛔ Эта команда доступна только администрации.", ephemeral: true });
   return true;
 }
 
-<<<<<<< HEAD
 async function memberHasRole(guild, discordId, roleId) {
   if (!guild || !discordId || !roleId) return false;
 
@@ -209,8 +304,6 @@ function welcomeDmEmbed() {
     ].join("\n"));
 }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 async function userOf(discordUser) {
   return prisma.user.upsert({
     where: { discordId: discordUser.id },
@@ -219,7 +312,6 @@ async function userOf(discordUser) {
   });
 }
 
-<<<<<<< HEAD
 async function decrementBalanceOrThrow(tx, userId, amount) {
   const result = await tx.user.updateMany({
     where: {
@@ -287,28 +379,12 @@ ${description || ""}`,
       : [];
 
     if (cleanFields.length) e.addFields(cleanFields);
-=======
-async function log(type, title, description, fields = []) {
-  try {
-    await prisma.botLog.create({ data: { type, message: `${title}\n${description || ""}` } });
-  } catch (e) {}
-
-  const channelId = process.env.LOG_CHANNEL_ID;
-  if (!channelId) return;
-
-  try {
-    const channel = await client.channels.fetch(channelId);
-    if (!channel?.isTextBased()) return;
-    const e = embed(LS_THEME.green).setTitle(title).setDescription(description || "Без описания");
-    if (fields.length) e.addFields(fields);
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
     await channel.send({ embeds: [e] });
   } catch (error) {
     console.error("LOG ERROR:", error.message);
   }
 }
 
-<<<<<<< HEAD
 function logColor(type) {
   const value = String(type || "").toUpperCase();
 
@@ -358,33 +434,18 @@ function txName(type) {
     PROMO_EDITED: "Промокод изменён",
     PROMO_DELETED: "Промокод удалён",
     PROMO_ACTIVATED: "Промокод активирован",
-=======
-function txName(type) {
-  return {
-    EVENT_BET: "Ставка",
-    EVENT_WIN: "Выигрыш",
-    ADMIN_ADD: "Начисление админа",
-    ADMIN_REMOVE: "Списание админа",
-    BALANCE_SET: "Баланс установлен",
-    TOPUP_APPROVED: "Пополнение",
-    PROMO_ACTIVATED: "Промокод",
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
     REFERRAL_BONUS: "Реферальный бонус",
     COINFLIP_CREATE: "Coinflip создан",
     COINFLIP_ACCEPT: "Coinflip принят",
     COINFLIP_WIN: "Coinflip выигрыш",
     COINFLIP_REFUND: "Coinflip возврат",
-<<<<<<< HEAD
     COINFLIP_CANCELLED: "Coinflip отменён",
     WITHDRAW_CREATED: "Заявка на вывод создана",
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
     WITHDRAW_REQUEST: "Заявка на вывод",
     WITHDRAW_APPROVED: "Вывод одобрен",
     WITHDRAW_REJECTED: "Вывод отклонён",
     WITHDRAW_REFUND: "Возврат вывода",
     LOTTERY_TICKET: "Билет лотереи",
-<<<<<<< HEAD
     LOTTERY_DRAW: "Розыгрыш лотереи",
     LOTTERY_WIN: "Выигрыш лотереи",
     CRASH_BET: "CRASH ставка",
@@ -395,9 +456,6 @@ function txName(type) {
     REGISTRATION_APPROVED: "Регистрация одобрена",
     REGISTRATION_REJECTED: "Регистрация отклонена",
     TICKET_CLOSED: "Тикет закрыт",
-=======
-    LOTTERY_WIN: "Выигрыш лотереи",
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
   }[type] || type;
 }
 
@@ -405,7 +463,6 @@ function statusEvent(status) {
   if (status === "OPEN") return "🟢 OPEN";
   if (status === "LIVE") return "🔴 LIVE";
   if (status === "FINISHED") return "🏁 FINISHED";
-<<<<<<< HEAD
   if (status === "CANCELLED") return "⚫ CANCELLED";
   return status;
 }
@@ -417,11 +474,6 @@ function registrationStatusName(status) {
   return "⚪ Не пройдена";
 }
 
-=======
-  return status;
-}
-
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 function isEventClosed(event) {
   return new Date(event.closesAt).getTime() <= Date.now();
 }
@@ -441,7 +493,6 @@ async function fullEvent(id) {
   });
 }
 
-<<<<<<< HEAD
 function registrationPanel() {
   const e = embed(LS_THEME.green)
     .setTitle("📝 LS BET — Регистрация игрока")
@@ -500,17 +551,17 @@ function closeRegistrationTicketRow(requestId) {
 async function createRegistrationRequest(interaction, fullName, phone, ageRaw) {
   const age = Number(ageRaw);
   if (!Number.isInteger(age) || age < 1 || age > 120) {
-    return interaction.reply({ content: "Возраст должен быть числом от 1 до 120.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Возраст должен быть числом от 1 до 120.", ephemeral: true });
   }
 
   const user = await userOf(interaction.user);
   if (user.registrationStatus === "APPROVED") {
-    return interaction.reply({ content: "✅ Ты уже зарегистрирован в LS BET.", ephemeral: true });
+    return respondInteraction(interaction, { content: "✅ Ты уже зарегистрирован в LS BET.", ephemeral: true });
   }
 
   const pending = await prisma.registrationRequest.findFirst({ where: { userId: user.id, status: "PENDING" } });
   if (pending) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: pending.ticketChannelId ? `⏳ У тебя уже есть заявка на модерации: <#${pending.ticketChannelId}>.` : "⏳ У тебя уже есть заявка на модерации.",
       ephemeral: true,
     });
@@ -519,8 +570,28 @@ async function createRegistrationRequest(interaction, fullName, phone, ageRaw) {
   const request = await prisma.registrationRequest.create({ data: { userId: user.id, fullName, phone, age, status: "PENDING" } });
   await prisma.user.update({ where: { id: user.id }, data: { registrationStatus: "PENDING" } });
 
-  const channel = await createTicketChannel(interaction, "registration", request.id);
-  await prisma.registrationRequest.update({ where: { id: request.id }, data: { ticketChannelId: channel.id } });
+  let channel;
+  try {
+    channel = await createTicketChannel(interaction, "registration", request.id);
+    await prisma.registrationRequest.update({ where: { id: request.id }, data: { ticketChannelId: channel.id } });
+  } catch (error) {
+    console.error("REGISTRATION TICKET CREATE ERROR:", error);
+    await prisma.$transaction([
+      prisma.registrationRequest.update({
+        where: { id: request.id },
+        data: { status: "CANCELLED", processedAt: new Date(), rejectReason: "Не удалось создать Discord-тикет" },
+      }),
+      prisma.user.update({
+        where: { id: user.id },
+        data: { registrationStatus: null },
+      }),
+    ]);
+
+    return respondInteraction(interaction, {
+      content: "❌ Не удалось создать тикет регистрации. Попробуй ещё раз или сообщи администратору.",
+      ephemeral: true,
+    });
+  }
 
   const e = embed(LS_THEME.gold)
     .setTitle(`📝 Заявка на регистрацию #${request.id}`)
@@ -542,14 +613,15 @@ async function createRegistrationRequest(interaction, fullName, phone, ageRaw) {
     { name: "Возраст", value: String(age), inline: true },
   ], { userId: user.id, channelId: channel.id });
 
-  return interaction.reply({ content: `✅ Заявка на регистрацию создана: <#${channel.id}>. Ожидай решения администрации.`, ephemeral: true });
+  return respondInteraction(interaction, { content: `✅ Заявка на регистрацию создана: <#${channel.id}>. Ожидай решения администрации.`, ephemeral: true });
 }
 
 async function approveRegistration(interaction, requestId) {
   if (await adminOnly(interaction)) return;
+  await interaction.deferUpdate();
   const request = await prisma.registrationRequest.findUnique({ where: { id: requestId }, include: { user: true } });
-  if (!request) return interaction.reply({ content: "Заявка не найдена.", ephemeral: true });
-  if (request.status !== "PENDING") return interaction.reply({ content: "Эта заявка уже обработана.", ephemeral: true });
+  if (!request) return respondInteraction(interaction, { content: "Заявка не найдена.", ephemeral: true });
+  if (request.status !== "PENDING") return respondInteraction(interaction, { content: "Эта заявка уже обработана.", ephemeral: true });
 
   await prisma.$transaction(async (tx) => {
     const lock = await tx.registrationRequest.updateMany({ where: { id: request.id, status: "PENDING" }, data: { status: "APPROVED", processedBy: interaction.user.id, processedAt: new Date() } });
@@ -562,7 +634,7 @@ async function approveRegistration(interaction, requestId) {
     return false;
   });
 
-  await interaction.update({
+  await interaction.editReply({
     content:
       `✅ Регистрация игрока <@${request.user.discordId}> одобрена модератором <@${interaction.user.id}>.` +
       (REGISTRATION_ROLE_ID
@@ -583,9 +655,10 @@ async function approveRegistration(interaction, requestId) {
 
 async function rejectRegistration(interaction, requestId) {
   if (await adminOnly(interaction)) return;
+  await interaction.deferUpdate();
   const request = await prisma.registrationRequest.findUnique({ where: { id: requestId }, include: { user: true } });
-  if (!request) return interaction.reply({ content: "Заявка не найдена.", ephemeral: true });
-  if (request.status !== "PENDING") return interaction.reply({ content: "Эта заявка уже обработана.", ephemeral: true });
+  if (!request) return respondInteraction(interaction, { content: "Заявка не найдена.", ephemeral: true });
+  if (request.status !== "PENDING") return respondInteraction(interaction, { content: "Эта заявка уже обработана.", ephemeral: true });
 
   await prisma.$transaction(async (tx) => {
     const lock = await tx.registrationRequest.updateMany({ where: { id: request.id, status: "PENDING" }, data: { status: "REJECTED", processedBy: interaction.user.id, processedAt: new Date() } });
@@ -593,7 +666,7 @@ async function rejectRegistration(interaction, requestId) {
     await tx.user.update({ where: { id: request.userId }, data: { registrationStatus: "REJECTED" } });
   });
 
-  await interaction.update({ content: `❌ Регистрация игрока <@${request.user.discordId}> отклонена модератором <@${interaction.user.id}>.`, components: [closeRegistrationTicketRow(request.id)] });
+  await interaction.editReply({ content: `❌ Регистрация игрока <@${request.user.discordId}> отклонена модератором <@${interaction.user.id}>.`, components: [closeRegistrationTicketRow(request.id)] });
   await log("REGISTRATION_REJECTED", "❌ Регистрация отклонена", `Модератор <@${interaction.user.id}> отклонил заявку #${request.id}.`, [
     { name: "Игрок", value: `<@${request.user.discordId}>`, inline: true },
     { name: "Тикет", value: request.ticketChannelId ? `<#${request.ticketChannelId}>` : "—", inline: true },
@@ -602,40 +675,28 @@ async function rejectRegistration(interaction, requestId) {
 
 async function closeRegistrationTicket(interaction, requestId) {
   if (await adminOnly(interaction)) return;
+  await interaction.deferUpdate();
   await log("TICKET_CLOSED", "🔒 Тикет регистрации закрыт", `Модератор <@${interaction.user.id}> закрыл тикет регистрации #${requestId}.`, [], { channelId: interaction.channelId });
   return interaction.channel.delete(`Registration ticket #${requestId} closed by ${interaction.user.tag}`).catch(() => null);
 }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 function mainPanel() {
   const e = embed(LS_THEME.green)
     .setTitle("💚 LS Bet — Главное меню")
     .setDescription([
       "```",
       "LS BET PLATFORM",
-<<<<<<< HEAD
       "EVENTS • COINFLIP • LOTTERY • PROMO",
       "```",
       "Cобытия, ставки, Coinflip, лотерея 5 чисел, промокоды, пополнение и вывод баланса.",
-=======
-      "RP EVENTS • COINFLIP • LOTTERY • PROMO",
-      "```",
-      "RP-события, ставки, Coinflip, лотерея 5 чисел, промокоды, пополнение и вывод баланса.",
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       "",
       LS_TEXT.line,
     ].join("\n"));
 
   const r1 = new ActionRowBuilder().addComponents(
-<<<<<<< HEAD
     new ButtonBuilder().setCustomId("registration_start").setLabel("✅ Пройти верификацию").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId("panel_profile").setLabel("👤 Профиль").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("panel_events").setLabel("🎰 События").setStyle(ButtonStyle.Primary),
-=======
-    new ButtonBuilder().setCustomId("panel_profile").setLabel("👤 Профиль").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId("panel_events").setLabel("🎰 RP-события").setStyle(ButtonStyle.Primary),
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
     new ButtonBuilder().setCustomId("panel_mybets").setLabel("🧾 Мои ставки").setStyle(ButtonStyle.Secondary)
   );
 
@@ -648,11 +709,8 @@ function mainPanel() {
   );
 
   const r3 = new ActionRowBuilder().addComponents(
-<<<<<<< HEAD
     new ButtonBuilder().setCustomId("panel_jackpot").setLabel("💣 Jackpot War").setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId("panel_crash").setLabel("🚀 CRASH").setStyle(ButtonStyle.Primary),
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
     new ButtonBuilder().setCustomId("panel_topup").setLabel("💰 Пополнить").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId("panel_withdraw").setLabel("💸 Вывести").setStyle(ButtonStyle.Danger)
   );
@@ -663,7 +721,6 @@ function mainPanel() {
 function adminPanel() {
   const e = embed(LS_THEME.gold)
     .setTitle("🛠️ LS Bet — Admin Panel")
-<<<<<<< HEAD
     .setDescription([
       "```",
       "ADMIN CONTROL CENTER",
@@ -713,20 +770,6 @@ function adminUsersPanel() {
   const r2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("admin_users_top_button").setLabel("🏆 Топ игроков").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("admin_back_main").setLabel("⬅️ Назад").setStyle(ButtonStyle.Secondary)
-=======
-    .setDescription(["```", "ADMIN CONTROL CENTER", "EVENTS • TOPUPS • WITHDRAWS • PROMOS • LOTTERY", "```", LS_TEXT.line].join("\n"));
-
-  const r1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("admin_events").setLabel("📢 События").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("admin_topups").setLabel("💰 Заявки").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("admin_withdraws").setLabel("💸 Выводы").setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId("admin_promos").setLabel("🎟️ Промокоды").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("admin_public_panel").setLabel("📌 Меню").setStyle(ButtonStyle.Success)
-  );
-
-  const r2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("admin_lottery").setLabel("🎫 Лотерея").setStyle(ButtonStyle.Success)
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
   );
 
   return { embeds: [e], components: [r1, r2], ephemeral: true };
@@ -734,7 +777,6 @@ function adminUsersPanel() {
 
 function eventEmbeds(event) {
   const closed = event.status !== "OPEN" || isEventClosed(event);
-<<<<<<< HEAD
   const color = event.status === "OPEN" ? LS_THEME.green : event.status === "LIVE" ? LS_THEME.red : event.status === "CANCELLED" ? 0x2b2d31 : LS_THEME.gold;
   const status = statusEvent(closed && event.status === "OPEN" ? "LIVE" : event.status);
   const bank = eventBank(event);
@@ -776,38 +818,10 @@ function eventEmbeds(event) {
   if (bannerUrl) main.setImage(bannerUrl);
 
   return [main];
-=======
-  const color = event.status === "OPEN" ? LS_THEME.green : event.status === "LIVE" ? LS_THEME.red : LS_THEME.gold;
-
-  const main = embed(color)
-    .setTitle(`🎰 LS BET EVENT #${event.id}`)
-    .setDescription([
-      `# ${event.title}`,
-      "",
-      event.description || "Описание не указано.",
-      "",
-      LS_TEXT.line,
-      `**Статус:** ${statusEvent(closed && event.status === "OPEN" ? "LIVE" : event.status)}`,
-      `**Закрытие ставок:** <t:${unix(event.closesAt)}:R>`,
-      `**Банк события:** ${money(eventBank(event))}`,
-      LS_TEXT.line,
-    ].join("\n"));
-
-  const options = event.options.map((o, i) => {
-    const e = embed(i === 0 ? LS_THEME.green : LS_THEME.gold)
-      .setTitle(`${i === 0 ? "1️⃣" : "2️⃣"} ${o.title}`)
-      .setDescription(`**Коэффициент:** x${o.odds}\n**Поставлено:** ${money(optionTotal(o))}`);
-    if (o.imageUrl) e.setImage(o.imageUrl);
-    return e;
-  });
-
-  return [main, ...options];
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 }
 
 function eventButtons(event) {
   const disabled = event.status !== "OPEN" || isEventClosed(event);
-<<<<<<< HEAD
   const rows = [];
   const options = (event.options || []).slice(0, 5);
 
@@ -823,18 +837,6 @@ function eventButtons(event) {
       );
     }
     rows.push(row);
-=======
-  const row = new ActionRowBuilder();
-
-  for (const option of event.options.slice(0, 2)) {
-    row.addComponents(
-      new ButtonBuilder()
-        .setCustomId(`bet:${event.id}:${option.id}`)
-        .setLabel(`💵 Поставить на ${option.title}`)
-        .setStyle(ButtonStyle.Success)
-        .setDisabled(disabled)
-    );
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
   }
 
   const row2 = new ActionRowBuilder().addComponents(
@@ -842,14 +844,9 @@ function eventButtons(event) {
     new ButtonBuilder().setCustomId("panel_profile").setLabel("👤 Профиль").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("panel_top").setLabel("🏆 Top").setStyle(ButtonStyle.Secondary)
   );
-<<<<<<< HEAD
   rows.push(row2);
 
   return rows;
-=======
-
-  return [row, row2];
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 }
 
 async function updateEventMessage(eventId) {
@@ -881,11 +878,7 @@ async function publishEventResult(event, winnerOption, winnersCount, totalPaid) 
       .setTitle("🏁 LS BET RESULT")
       .setDescription([
         "```",
-<<<<<<< HEAD
         "EVENT FINISHED",
-=======
-        "RP EVENT FINISHED",
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
         "```",
         `# ${event.title}`,
         "",
@@ -895,16 +888,11 @@ async function publishEventResult(event, winnerOption, winnersCount, totalPaid) 
         `**Выплачено:** ${money(totalPaid)}`,
       ].join("\n"));
     if (winnerOption.imageUrl) e.setImage(winnerOption.imageUrl);
-<<<<<<< HEAD
     await channel.send({ content: "🏁 **Итоги события**", embeds: [e] });
-=======
-    await channel.send({ content: "🏁 **Итоги RP-события**", embeds: [e] });
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
   } catch (e) {
     console.error("publishEventResult:", e.message);
   }
 }
-<<<<<<< HEAD
 
 async function publishEventCancel(event, refundedCount, totalRefunded, reason) {
   try {
@@ -1292,7 +1280,7 @@ async function jackpotWarPanel(interaction) {
     new ButtonBuilder().setCustomId("panel_lottery").setLabel("🎫 Лотерея").setStyle(ButtonStyle.Success)
   );
 
-  return interaction.reply({ embeds: [e], components: [row], ephemeral: true });
+  return respondInteraction(interaction, { embeds: [e], components: [row], ephemeral: true });
 }
 
 
@@ -1504,8 +1492,11 @@ function crashBetAutoCashoutSelector(roundId) {
   return rows;
 }
 
-function crashBetModal(autoCashoutMultiplier = null, custom = false) {
-  const customId = custom ? "crash_bet_custom_modal" : `crash_bet_modal:${autoCashoutMultiplier}`;
+function crashBetModal(autoCashoutMultiplier = null, custom = false, roundId = null) {
+  const normalizedRoundId = Number(roundId);
+  const customId = custom
+    ? `crash_bet_custom_modal:${normalizedRoundId}`
+    : `crash_bet_modal:${normalizedRoundId}:${autoCashoutMultiplier}`;
   const modal = new ModalBuilder().setCustomId(customId).setTitle("LS BET CRASH — ставка");
   const rows = [
     new ActionRowBuilder().addComponents(
@@ -1532,21 +1523,21 @@ function crashBetModal(autoCashoutMultiplier = null, custom = false) {
 
 async function showCrashPanel(interaction) {
   if (interaction.channelId !== CRASH_CHANNEL_ID) {
-    return interaction.reply({ content: `🚀 CRASH доступен только в канале <#${CRASH_CHANNEL_ID}>.`, ephemeral: true });
+    return respondInteraction(interaction, { content: `🚀 CRASH доступен только в канале <#${CRASH_CHANNEL_ID}>.`, ephemeral: true });
   }
   const round = await currentCrashRound();
-  return interaction.reply({ embeds: [crashEmbed(round)], components: crashButtons(round), ephemeral: true });
+  return respondInteraction(interaction, { embeds: [crashEmbed(round)], components: crashButtons(round), ephemeral: true });
 }
 
 async function handleCrashBet(interaction) {
   if (interaction.channelId !== CRASH_CHANNEL_ID) {
-    return interaction.reply({ content: `🚀 CRASH доступен только в канале <#${CRASH_CHANNEL_ID}>.`, ephemeral: true });
+    return respondInteraction(interaction, { content: `🚀 CRASH доступен только в канале <#${CRASH_CHANNEL_ID}>.`, ephemeral: true });
   }
   const round = await currentCrashRound();
   if (!round || round.status !== "BETTING") {
-    return interaction.reply({ content: "Сейчас ставки не принимаются. Дождись следующего раунда.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Сейчас ставки не принимаются. Дождись следующего раунда.", ephemeral: true });
   }
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content: [
       "🚀 **CRASH — выбери авто-кэшаут**",
       "",
@@ -1560,60 +1551,65 @@ async function handleCrashBet(interaction) {
 
 async function handleCrashAutoCashoutButton(interaction, autoCashoutRaw, roundIdRaw) {
   if (interaction.channelId !== CRASH_CHANNEL_ID) {
-    return interaction.reply({ content: `🚀 CRASH доступен только в канале <#${CRASH_CHANNEL_ID}>.`, ephemeral: true });
+    return respondInteraction(interaction, { content: `🚀 CRASH доступен только в канале <#${CRASH_CHANNEL_ID}>.`, ephemeral: true });
   }
+
   const roundId = Number(roundIdRaw);
-  const round = await currentCrashRound();
-  if (!round || round.status !== "BETTING" || round.id !== roundId) {
-    return interaction.reply({ content: "Этот выбор уже устарел. Дождись следующего раунда.", ephemeral: true });
-  }
   const autoCashoutMultiplier = normalizeCrashAutoCashout(autoCashoutRaw);
-  if (!autoCashoutMultiplier) {
-    return interaction.reply({ content: "Некорректный авто-кэшаут.", ephemeral: true });
+  if (!Number.isInteger(roundId) || !autoCashoutMultiplier) {
+    return respondInteraction(interaction, { content: "Некорректный или устаревший выбор CRASH.", ephemeral: true });
   }
-  return interaction.showModal(crashBetModal(autoCashoutMultiplier));
+
+  // Показываем форму сразу, без запроса к БД. Актуальность раунда проверяется при отправке формы.
+  return interaction.showModal(crashBetModal(autoCashoutMultiplier, false, roundId));
 }
 
 async function handleCrashCustomAutoCashoutButton(interaction, roundIdRaw) {
   if (interaction.channelId !== CRASH_CHANNEL_ID) {
-    return interaction.reply({ content: `🚀 CRASH доступен только в канале <#${CRASH_CHANNEL_ID}>.`, ephemeral: true });
+    return respondInteraction(interaction, { content: `🚀 CRASH доступен только в канале <#${CRASH_CHANNEL_ID}>.`, ephemeral: true });
   }
+
   const roundId = Number(roundIdRaw);
-  const round = await currentCrashRound();
-  if (!round || round.status !== "BETTING" || round.id !== roundId) {
-    return interaction.reply({ content: "Этот выбор уже устарел. Дождись следующего раунда.", ephemeral: true });
+  if (!Number.isInteger(roundId)) {
+    return respondInteraction(interaction, { content: "Некорректный или устаревший выбор CRASH.", ephemeral: true });
   }
-  return interaction.showModal(crashBetModal(null, true));
+
+  return interaction.showModal(crashBetModal(null, true, roundId));
 }
 
 async function applyCrashBet(interaction) {
   if (interaction.channelId !== CRASH_CHANNEL_ID) {
-    return interaction.reply({ content: `🚀 CRASH доступен только в канале <#${CRASH_CHANNEL_ID}>.`, ephemeral: true });
+    return respondInteraction(interaction, { content: `🚀 CRASH доступен только в канале <#${CRASH_CHANNEL_ID}>.`, ephemeral: true });
   }
   const amount = Number(interaction.fields.getTextInputValue("amount"));
   let autoCashoutMultiplier = null;
-  if (interaction.customId === "crash_bet_custom_modal") {
+  let selectedRoundId = null;
+
+  if (interaction.customId.startsWith("crash_bet_custom_modal:")) {
+    selectedRoundId = Number(interaction.customId.split(":")[1]);
     autoCashoutMultiplier = normalizeCrashAutoCashout(interaction.fields.getTextInputValue("autoCashout"));
   } else if (interaction.customId.startsWith("crash_bet_modal:")) {
-    autoCashoutMultiplier = normalizeCrashAutoCashout(interaction.customId.split(":")[1]);
+    const [, roundIdRaw, autoCashoutRaw] = interaction.customId.split(":");
+    selectedRoundId = Number(roundIdRaw);
+    autoCashoutMultiplier = normalizeCrashAutoCashout(autoCashoutRaw);
   }
   if (!autoCashoutMultiplier) {
-    return interaction.reply({ content: `Укажи авто-кэшаут от **${crashMultiplierText(CRASH_AUTO_CASHOUT_MIN)}** до **${crashMultiplierText(CRASH_AUTO_CASHOUT_MAX)}**.`, ephemeral: true });
+    return respondInteraction(interaction, { content: `Укажи авто-кэшаут от **${crashMultiplierText(CRASH_AUTO_CASHOUT_MIN)}** до **${crashMultiplierText(CRASH_AUTO_CASHOUT_MAX)}**.`, ephemeral: true });
   }
   if (!Number.isInteger(amount) || amount < CRASH_MIN_BET || amount > CRASH_MAX_BET) {
-    return interaction.reply({ content: `Укажи сумму от **${money(CRASH_MIN_BET)}** до **${money(CRASH_MAX_BET)}**.`, ephemeral: true });
+    return respondInteraction(interaction, { content: `Укажи сумму от **${money(CRASH_MIN_BET)}** до **${money(CRASH_MAX_BET)}**.`, ephemeral: true });
   }
   const user = await userOf(interaction.user);
   if (user.balance < amount) {
-    return interaction.reply({ content: `Недостаточно средств. Баланс: **${money(user.balance)}**.`, ephemeral: true });
+    return respondInteraction(interaction, { content: `Недостаточно средств. Баланс: **${money(user.balance)}**.`, ephemeral: true });
   }
   const round = await currentCrashRound();
-  if (!round || round.status !== "BETTING") {
-    return interaction.reply({ content: "Раунд уже стартовал. Дождись следующего.", ephemeral: true });
+  if (!round || round.status !== "BETTING" || round.id !== selectedRoundId) {
+    return respondInteraction(interaction, { content: "Раунд уже стартовал или выбор устарел. Дождись следующего.", ephemeral: true });
   }
   const existing = await prisma.crashBet.findFirst({ where: { roundId: round.id, userId: user.id, status: "ACTIVE" } });
   if (existing) {
-    return interaction.reply({ content: "У тебя уже есть активная ставка в этом раунде.", ephemeral: true });
+    return respondInteraction(interaction, { content: "У тебя уже есть активная ставка в этом раунде.", ephemeral: true });
   }
 
   let jackpotInfo = null;
@@ -1637,21 +1633,21 @@ async function applyCrashBet(interaction) {
   const updatedRound = await currentCrashRound();
   await sendOrUpdateCrashPanel(updatedRound);
   await sendJackpotWarLiveNotification(jackpotInfo);
-  return interaction.reply({ content: `✅ Ставка CRASH принята: **${money(amount)}**. Авто-кэшаут: **${crashMultiplierText(autoCashoutMultiplier)}**.`, ephemeral: true });
+  return respondInteraction(interaction, { content: `✅ Ставка CRASH принята: **${money(amount)}**. Авто-кэшаут: **${crashMultiplierText(autoCashoutMultiplier)}**.`, ephemeral: true });
 }
 
 async function handleCrashCashout(interaction) {
   if (interaction.channelId !== CRASH_CHANNEL_ID) {
-    return interaction.reply({ content: `🚀 CRASH доступен только в канале <#${CRASH_CHANNEL_ID}>.`, ephemeral: true });
+    return respondInteraction(interaction, { content: `🚀 CRASH доступен только в канале <#${CRASH_CHANNEL_ID}>.`, ephemeral: true });
   }
   const round = await currentCrashRound();
   if (!round || round.status !== "RUNNING") {
-    return interaction.reply({ content: "Сейчас нельзя забрать выигрыш.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Сейчас нельзя забрать выигрыш.", ephemeral: true });
   }
   const user = await userOf(interaction.user);
   const bet = await prisma.crashBet.findFirst({ where: { roundId: round.id, userId: user.id, status: "ACTIVE" } });
   if (!bet) {
-    return interaction.reply({ content: "У тебя нет активной ставки в текущем раунде.", ephemeral: true });
+    return respondInteraction(interaction, { content: "У тебя нет активной ставки в текущем раунде.", ephemeral: true });
   }
 
   const multiplier = Math.max(1, Number(crashRuntime.multiplier || 1));
@@ -1675,7 +1671,7 @@ async function handleCrashCashout(interaction) {
 
   const updatedRound = await currentCrashRound();
   await sendOrUpdateCrashPanel(updatedRound);
-  return interaction.reply({ content: `💰 Забрал на **${crashMultiplierText(multiplier)}**. Выплата: **${money(payout)}**.`, ephemeral: true });
+  return respondInteraction(interaction, { content: `💰 Забрал на **${crashMultiplierText(multiplier)}**. Выплата: **${money(payout)}**.`, ephemeral: true });
 }
 
 async function processCrashAutoCashouts(roundId, multiplier) {
@@ -1727,7 +1723,88 @@ async function processCrashAutoCashouts(roundId, multiplier) {
 async function showCrashHistory(interaction) {
   const rounds = await prisma.crashRound.findMany({ where: { status: "CRASHED" }, orderBy: { id: "desc" }, take: 10 });
   const text = rounds.length ? rounds.map((round) => `#${round.id} — 💥 **${crashMultiplierText(round.crashPoint)}**`).join("\n") : "Истории пока нет.";
-  return interaction.reply({ embeds: [embed(LS_THEME.gold).setTitle("📊 CRASH — история раундов").setDescription(text)], ephemeral: true });
+  return respondInteraction(interaction, { embeds: [embed(LS_THEME.gold).setTitle("📊 CRASH — история раундов").setDescription(text)], ephemeral: true });
+}
+
+async function cancelCrashRoundAndRefund(roundId, reason) {
+  return prisma.$transaction(async (tx) => {
+    const lock = await tx.crashRound.updateMany({
+      where: { id: roundId, status: { in: ["BETTING", "RUNNING"] } },
+      data: { status: "CANCELLED", endedAt: new Date() },
+    });
+
+    if (lock.count !== 1) {
+      return { cancelled: false, refundedBets: 0, refundedAmount: 0 };
+    }
+
+    const activeBets = await tx.crashBet.findMany({
+      where: { roundId, status: "ACTIVE" },
+    });
+
+    let refundedBets = 0;
+    let refundedAmount = 0;
+
+    for (const bet of activeBets) {
+      const betLock = await tx.crashBet.updateMany({
+        where: { id: bet.id, status: "ACTIVE" },
+        data: { status: "REFUNDED", payout: bet.amount, cashedOutAt: new Date() },
+      });
+
+      if (betLock.count !== 1) continue;
+
+      await tx.user.update({
+        where: { id: bet.userId },
+        data: { balance: { increment: bet.amount } },
+      });
+
+      await tx.transaction.create({
+        data: {
+          userId: bet.userId,
+          amount: bet.amount,
+          type: "CRASH_REFUND",
+          comment: `Возврат ставки CRASH #${roundId}: ${reason}`,
+        },
+      });
+
+      refundedBets += 1;
+      refundedAmount += bet.amount;
+    }
+
+    return { cancelled: true, refundedBets, refundedAmount };
+  });
+}
+
+async function recoverStaleCrashRounds() {
+  const staleRounds = await prisma.crashRound.findMany({
+    where: { status: { in: ["BETTING", "RUNNING"] } },
+    orderBy: { id: "asc" },
+  });
+
+  if (!staleRounds.length) return;
+
+  let cancelledRounds = 0;
+  let refundedBets = 0;
+  let refundedAmount = 0;
+
+  for (const round of staleRounds) {
+    const result = await cancelCrashRoundAndRefund(round.id, "восстановление после перезапуска бота");
+    if (!result.cancelled) continue;
+    cancelledRounds += 1;
+    refundedBets += result.refundedBets;
+    refundedAmount += result.refundedAmount;
+  }
+
+  crashRuntime.roundId = null;
+  crashRuntime.status = "IDLE";
+  crashRuntime.multiplier = 1;
+  crashRuntime.bettingEndsAt = null;
+  crashRuntime.runningStartedAt = null;
+  crashRuntime.crashedAt = null;
+  crashRuntime.nextStartsAt = null;
+
+  console.warn(
+    `⚠️ Восстановление CRASH: отменено раундов ${cancelledRounds}, возвращено ставок ${refundedBets} на ${money(refundedAmount)}.`
+  );
 }
 
 async function startCrashGameLoop() {
@@ -1735,8 +1812,10 @@ async function startCrashGameLoop() {
   crashRuntime.active = true;
 
   while (true) {
+    let activeRoundId = null;
     try {
       let round = await prisma.crashRound.create({ data: { status: "BETTING", crashPoint: generateCrashPoint(), channelId: CRASH_CHANNEL_ID } });
+      activeRoundId = round.id;
       crashRuntime.roundId = round.id;
       crashRuntime.status = "BETTING";
       crashRuntime.multiplier = 1;
@@ -1762,7 +1841,14 @@ async function startCrashGameLoop() {
 
       const crashPoint = round.crashPoint || 2;
       while (crashRuntime.multiplier < crashPoint) {
-        crashRuntime.multiplier = Number((crashRuntime.multiplier + Math.max(0.03, crashRuntime.multiplier * 0.08)).toFixed(2));
+        const nextMultiplier = Number(
+          (crashRuntime.multiplier + Math.max(0.03, crashRuntime.multiplier * 0.08)).toFixed(2)
+        );
+
+        // Не даём авто-кэшауту сработать выше фактической точки краша.
+        if (nextMultiplier >= crashPoint) break;
+
+        crashRuntime.multiplier = nextMultiplier;
         await processCrashAutoCashouts(round.id, crashRuntime.multiplier);
         const runningRound = await prisma.crashRound.findUnique({ where: { id: round.id }, include: { bets: { include: { user: true } } } });
         await sendOrUpdateCrashPanel(runningRound);
@@ -1816,15 +1902,36 @@ async function startCrashGameLoop() {
         await sendOrUpdateCrashPanel(finishedRound);
       }
       crashRuntime.nextStartsAt = null;
+      activeRoundId = null;
     } catch (error) {
       console.error("CRASH LOOP ERROR:", error.message);
+
+      if (activeRoundId) {
+        try {
+          const recovery = await cancelCrashRoundAndRefund(activeRoundId, "внутренняя ошибка игрового цикла");
+          if (recovery.cancelled) {
+            console.warn(
+              `⚠️ CRASH #${activeRoundId} отменён: возвращено ставок ${recovery.refundedBets} на ${money(recovery.refundedAmount)}.`
+            );
+          }
+        } catch (recoveryError) {
+          console.error("CRASH RECOVERY ERROR:", recoveryError);
+        }
+      }
+
+      crashRuntime.roundId = null;
+      crashRuntime.status = "IDLE";
+      crashRuntime.multiplier = 1;
+      crashRuntime.bettingEndsAt = null;
+      crashRuntime.runningStartedAt = null;
+      crashRuntime.crashedAt = null;
+      crashRuntime.nextStartsAt = null;
+
       await new Promise((resolve) => setTimeout(resolve, 10000));
     }
   }
 }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 async function showProfile(interaction) {
   const user = await userOf(interaction.user);
 
@@ -1848,10 +1955,7 @@ async function showProfile(interaction) {
     .setDescription(["```", "PLAYER PROFILE", "```", `Игрок: <@${interaction.user.id}>`, LS_TEXT.line].join("\n"))
     .addFields(
       { name: "Баланс", value: money(user.balance), inline: true },
-<<<<<<< HEAD
       { name: "Регистрация", value: registrationStatusName(user.registrationStatus), inline: true },
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       { name: "Всего ставок", value: String(totalBets), inline: true },
       { name: "Активные ставки", value: String(activeBets), inline: true },
       { name: "Выиграно ставок", value: String(wonBets), inline: true },
@@ -1862,7 +1966,7 @@ async function showProfile(interaction) {
       { name: "С рефералов", value: money(referralEarned._sum.amount || 0), inline: true }
     );
 
-  return interaction.reply({ embeds: [e], ephemeral: true });
+  return respondInteraction(interaction, { embeds: [e], ephemeral: true });
 }
 
 async function showHistory(interaction) {
@@ -1885,7 +1989,7 @@ async function showHistory(interaction) {
         .join("\n\n")
     : "Операций пока нет.";
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     embeds: [embed(LS_THEME.green).setTitle("📜 История операций").setDescription(text.slice(0, 4000))],
     ephemeral: true,
   });
@@ -1895,7 +1999,7 @@ async function showTop(interaction) {
   const users = await prisma.user.findMany({ orderBy: { balance: "desc" }, take: 10 });
 
   if (!users.length) {
-    return interaction.reply({ content: "Рейтинг пока пуст.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Рейтинг пока пуст.", ephemeral: true });
   }
 
   const medals = ["🥇", "🥈", "🥉"];
@@ -1903,7 +2007,7 @@ async function showTop(interaction) {
     .map((u, i) => `${medals[i] || `#${i + 1}`} <@${u.discordId}> — **${money(u.balance)}**`)
     .join("\n");
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     embeds: [embed(LS_THEME.gold).setTitle("🏆 LS Bet Top").setDescription(["```", "LEADERBOARD", "```", text].join("\n"))],
     ephemeral: true,
   });
@@ -1920,7 +2024,7 @@ async function showMyBets(interaction) {
   });
 
   if (!bets.length) {
-    return interaction.reply({ content: "У тебя пока нет ставок.", ephemeral: true });
+    return respondInteraction(interaction, { content: "У тебя пока нет ставок.", ephemeral: true });
   }
 
   const text = bets
@@ -1932,7 +2036,7 @@ async function showMyBets(interaction) {
     })
     .join("\n\n");
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     embeds: [embed(LS_THEME.green).setTitle("🧾 Мои ставки").setDescription(text.slice(0, 4000))],
     ephemeral: true,
   });
@@ -1950,7 +2054,7 @@ async function showEvents(interaction) {
   });
 
   if (!events.length) {
-    return interaction.reply({ content: "Сейчас нет активных событий LS Bet.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Сейчас нет активных событий LS Bet.", ephemeral: true });
   }
 
   const embeds = [];
@@ -1961,7 +2065,7 @@ async function showEvents(interaction) {
     components.push(eventButtons(event)[0]);
   }
 
-  return interaction.reply({ embeds, components, ephemeral: true });
+  return respondInteraction(interaction, { embeds, components, ephemeral: true });
 }
 
 function topupModal() {
@@ -2063,13 +2167,9 @@ async function createTicketChannel(interaction, prefix, requestId) {
     permissionOverwrites,
   };
 
-<<<<<<< HEAD
   if (prefix === "registration" && REGISTRATION_CATEGORY_ID) {
     options.parent = REGISTRATION_CATEGORY_ID;
   } else if (prefix === "withdraw" && process.env.WITHDRAW_CATEGORY_ID) {
-=======
-  if (prefix === "withdraw" && process.env.WITHDRAW_CATEGORY_ID) {
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
     options.parent = process.env.WITHDRAW_CATEGORY_ID;
   } else if (process.env.TOPUP_CATEGORY_ID) {
     options.parent = process.env.TOPUP_CATEGORY_ID;
@@ -2091,12 +2191,26 @@ async function createTopUpTicket(interaction, login, amount, comment) {
     },
   });
 
-  const channel = await createTicketChannel(interaction, "topup", request.id);
+  let channel;
+  try {
+    channel = await createTicketChannel(interaction, "topup", request.id);
 
-  await prisma.topUpRequest.update({
-    where: { id: request.id },
-    data: { ticketChannelId: channel.id },
-  });
+    await prisma.topUpRequest.update({
+      where: { id: request.id },
+      data: { ticketChannelId: channel.id },
+    });
+  } catch (error) {
+    console.error("TOPUP TICKET CREATE ERROR:", error);
+    await prisma.topUpRequest.update({
+      where: { id: request.id },
+      data: { status: "CANCELLED", processedAt: new Date() },
+    });
+
+    return respondInteraction(interaction, {
+      content: "❌ Не удалось создать тикет пополнения. Попробуй ещё раз или сообщи администратору.",
+      ephemeral: true,
+    });
+  }
 
   const e = embed(LS_THEME.green)
     .setTitle(`💰 Заявка на пополнение #${request.id}`)
@@ -2114,7 +2228,7 @@ async function createTopUpTicket(interaction, login, amount, comment) {
     { name: "Ticket", value: `<#${channel.id}>`, inline: true },
   ]);
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content: `✅ Заявка создана: <#${channel.id}>. Загрузи туда скриншот перевода.`,
     ephemeral: true,
   });
@@ -2124,58 +2238,100 @@ async function createWithdrawTicket(interaction, login, amount, details, comment
   const user = await userOf(interaction.user);
 
   if (!Number.isInteger(amount) || amount <= 0) {
-    return interaction.reply({ content: "Введи корректную сумму вывода.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Введи корректную сумму вывода.", ephemeral: true });
   }
 
   if (user.balance < amount) {
-<<<<<<< HEAD
     await log("WITHDRAW_FAILED", "⚠️ Неудачная заявка на вывод", `Игрок <@${interaction.user.id}> попытался вывести больше баланса.`, [
       { name: "Запрошено", value: money(amount), inline: true },
       { name: "Баланс", value: money(user.balance), inline: true },
     ], { userId: user.id, channelId: interaction.channelId });
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-    return interaction.reply({ content: `Недостаточно средств. Баланс: **${money(user.balance)}**.`, ephemeral: true });
+    return respondInteraction(interaction, { content: `Недостаточно средств. Баланс: **${money(user.balance)}**.`, ephemeral: true });
   }
 
   const commission = Math.floor((amount * WITHDRAW_COMMISSION_PERCENT) / 100);
   const payoutAmount = amount - commission;
 
-  const request = await prisma.$transaction(async (tx) => {
-    await tx.user.update({ where: { id: user.id }, data: { balance: { decrement: amount } } });
+  let request;
+  try {
+    request = await prisma.$transaction(async (tx) => {
+      await decrementBalanceOrThrow(tx, user.id, amount);
 
-    const created = await tx.withdrawRequest.create({
-      data: {
-        userId: user.id,
-        login,
-        amount,
-        commission,
-        payoutAmount,
-        details,
-        comment: comment || null,
-        status: "PENDING",
-      },
+      const created = await tx.withdrawRequest.create({
+        data: {
+          userId: user.id,
+          login,
+          amount,
+          commission,
+          payoutAmount,
+          details,
+          comment: comment || null,
+          status: "PENDING",
+        },
+      });
+
+      await tx.transaction.create({
+        data: {
+          userId: user.id,
+          amount: -amount,
+          type: "WITHDRAW_REQUEST",
+          comment: `Заявка на вывод #${created.id}. Комиссия ${WITHDRAW_COMMISSION_PERCENT}%: ${money(commission)}. К получению: ${money(payoutAmount)}`,
+        },
+      });
+
+      return created;
+    });
+  } catch (error) {
+    if (isInsufficientBalance(error)) {
+      const freshUser = await prisma.user.findUnique({ where: { id: user.id } });
+      return respondInteraction(interaction, {
+        content: `Недостаточно средств. Баланс: **${money(freshUser?.balance || 0)}**.`,
+        ephemeral: true,
+      });
+    }
+    throw error;
+  }
+
+  let channel;
+  try {
+    channel = await createTicketChannel(interaction, "withdraw", request.id);
+
+    await prisma.withdrawRequest.update({
+      where: { id: request.id },
+      data: { ticketChannelId: channel.id },
+    });
+  } catch (error) {
+    console.error("WITHDRAW TICKET CREATE ERROR:", error);
+
+    await prisma.$transaction(async (tx) => {
+      const lock = await tx.withdrawRequest.updateMany({
+        where: { id: request.id, status: "PENDING", ticketChannelId: null },
+        data: { status: "CANCELLED", processedAt: new Date() },
+      });
+
+      if (lock.count !== 1) return;
+
+      await tx.user.update({
+        where: { id: user.id },
+        data: { balance: { increment: amount } },
+      });
+
+      await tx.transaction.create({
+        data: {
+          userId: user.id,
+          amount,
+          type: "WITHDRAW_REFUND",
+          comment: `Возврат по заявке #${request.id}: не удалось создать тикет`,
+        },
+      });
     });
 
-    await tx.transaction.create({
-      data: {
-        userId: user.id,
-        amount: -amount,
-        type: "WITHDRAW_REQUEST",
-        comment: `Заявка на вывод #${created.id}. Комиссия ${WITHDRAW_COMMISSION_PERCENT}%: ${money(commission)}. К получению: ${money(payoutAmount)}`,
-      },
+    return respondInteraction(interaction, {
+      content: "❌ Не удалось создать тикет вывода. Списанная сумма автоматически возвращена на баланс.",
+      ephemeral: true,
     });
-
-    return created;
-  });
-
-  const channel = await createTicketChannel(interaction, "withdraw", request.id);
-
-  await prisma.withdrawRequest.update({
-    where: { id: request.id },
-    data: { ticketChannelId: channel.id },
-  });
+  }
 
   const e = embed(LS_THEME.red)
     .setTitle(`💸 Заявка на вывод #${request.id}`)
@@ -2210,7 +2366,7 @@ async function createWithdrawTicket(interaction, login, amount, details, comment
     { name: "Ticket", value: `<#${channel.id}>`, inline: true },
   ]);
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content: `✅ Заявка на вывод создана: <#${channel.id}>.\nК получению: **${money(payoutAmount)}**`,
     ephemeral: true,
   });
@@ -2298,21 +2454,21 @@ async function approveTopUp(interaction, requestId) {
   });
 
   if (!request) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Заявка не найдена.",
       ephemeral: true,
     });
   }
 
   if (request.status === "APPROVED") {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Эта заявка уже одобрена.",
       ephemeral: true,
     });
   }
 
   if (request.status === "REJECTED") {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Эта заявка уже отклонена.",
       ephemeral: true,
     });
@@ -2327,7 +2483,6 @@ async function approveTopUp(interaction, requestId) {
     referralBonus = Math.floor((request.amount * refPercent) / 100);
   }
 
-<<<<<<< HEAD
   const hasRegistrationBonusRole = await memberHasRole(interaction.guild, request.user.discordId, REGISTRATION_ROLE_ID);
   const registrationBonus = hasRegistrationBonusRole ? calcRegistrationTopupBonus(request.amount) : 0;
   const totalPlayerTopup = request.amount + registrationBonus;
@@ -2340,38 +2495,17 @@ async function approveTopUp(interaction, requestId) {
 
     if (lock.count !== 1) return false;
 
-=======
-  await prisma.$transaction(async (tx) => {
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
     await tx.user.update({
       where: {
         id: request.userId,
       },
       data: {
         balance: {
-<<<<<<< HEAD
           increment: totalPlayerTopup,
-=======
-          increment: request.amount,
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
         },
       },
     });
 
-<<<<<<< HEAD
-=======
-    await tx.topUpRequest.update({
-      where: {
-        id: request.id,
-      },
-      data: {
-        status: "APPROVED",
-        processedBy: interaction.user.id,
-        processedAt: new Date(),
-      },
-    });
-
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
     await tx.transaction.create({
       data: {
         userId: request.userId,
@@ -2381,7 +2515,6 @@ async function approveTopUp(interaction, requestId) {
       },
     });
 
-<<<<<<< HEAD
     if (registrationBonus > 0) {
       await tx.transaction.create({
         data: {
@@ -2393,8 +2526,6 @@ async function approveTopUp(interaction, requestId) {
       });
     }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
     if (referrer && referralBonus > 0) {
       await tx.user.update({
         where: {
@@ -2429,20 +2560,15 @@ async function approveTopUp(interaction, requestId) {
         },
       });
     }
-<<<<<<< HEAD
     return true;
   });
 
   if (!approved) {
-    return interaction.reply({ content: "Эта заявка уже обработана.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Эта заявка уже обработана.", ephemeral: true });
   }
 
 
 
-=======
-  });
-
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
   if (request.ticketChannelId) {
     const ticketChannel = await client.channels
       .fetch(request.ticketChannelId)
@@ -2452,12 +2578,8 @@ async function approveTopUp(interaction, requestId) {
       await ticketChannel.send({
         content:
           `✅ <@${request.user.discordId}>, заявка **#${request.id}** одобрена.\n` +
-<<<<<<< HEAD
           `На баланс начислено **${money(totalPlayerTopup)}**.` +
           (registrationBonus > 0 ? `\n🎖️ Бонус регистрации: **+${money(registrationBonus)}**.` : ""),
-=======
-          `На баланс начислено **${money(request.amount)}**.`,
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
         components: [closeTicketRow(request.id)],
       });
     }
@@ -2478,7 +2600,6 @@ async function approveTopUp(interaction, requestId) {
         value: money(request.amount),
         inline: true,
       },
-<<<<<<< HEAD
       ...(registrationBonus > 0
         ? [
             {
@@ -2488,8 +2609,6 @@ async function approveTopUp(interaction, requestId) {
             },
           ]
         : []),
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       ...(referrer && referralBonus > 0
         ? [
             {
@@ -2507,17 +2626,12 @@ async function approveTopUp(interaction, requestId) {
     ]
   );
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content:
       `✅ Заявка #${request.id} одобрена. Игроку начислено **${money(
-<<<<<<< HEAD
         totalPlayerTopup
       )}**.` +
       (registrationBonus > 0 ? `\n🎖️ Бонус регистрации: **+${money(registrationBonus)}**.` : "") +
-=======
-        request.amount
-      )}**.` +
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       (referrer && referralBonus > 0
         ? `\n🤝 Реферер <@${referrer.discordId}> получил **${money(
             referralBonus
@@ -2540,42 +2654,28 @@ async function rejectTopUp(interaction, requestId) {
   });
 
   if (!request) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Заявка не найдена.",
       ephemeral: true,
     });
   }
 
   if (request.status === "APPROVED" || request.status === "REJECTED") {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Эта заявка уже обработана.",
       ephemeral: true,
     });
   }
 
-<<<<<<< HEAD
   const rejected = await prisma.topUpRequest.updateMany({
     where: { id: request.id, status: { notIn: ["APPROVED", "REJECTED"] } },
     data: { status: "REJECTED", processedBy: interaction.user.id, processedAt: new Date() },
   });
 
   if (rejected.count !== 1) {
-    return interaction.reply({ content: "Эта заявка уже обработана.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Эта заявка уже обработана.", ephemeral: true });
   }
 
-=======
-  await prisma.topUpRequest.update({
-    where: {
-      id: request.id,
-    },
-    data: {
-      status: "REJECTED",
-      processedBy: interaction.user.id,
-      processedAt: new Date(),
-    },
-  });
-
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
   if (request.ticketChannelId) {
     const ticketChannel = await client.channels
       .fetch(request.ticketChannelId)
@@ -2609,7 +2709,7 @@ async function rejectTopUp(interaction, requestId) {
     ]
   );
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content: `❌ Заявка #${request.id} отклонена.`,
     ephemeral: true,
   });
@@ -2628,20 +2728,19 @@ async function approveWithdraw(interaction, requestId) {
   });
 
   if (!request) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Заявка на вывод не найдена.",
       ephemeral: true,
     });
   }
 
   if (request.status !== "PENDING") {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Эта заявка уже обработана.",
       ephemeral: true,
     });
   }
 
-<<<<<<< HEAD
   const approved = await prisma.$transaction(async (tx) => {
     const lock = await tx.withdrawRequest.updateMany({
       where: { id: request.id, status: "PENDING" },
@@ -2651,26 +2750,10 @@ async function approveWithdraw(interaction, requestId) {
     if (lock.count !== 1) return false;
 
     await tx.transaction.create({
-=======
-  await prisma.$transaction([
-    prisma.withdrawRequest.update({
-      where: {
-        id: request.id,
-      },
-      data: {
-        status: "APPROVED",
-        processedBy: interaction.user.id,
-        processedAt: new Date(),
-      },
-    }),
-
-    prisma.transaction.create({
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       data: {
         userId: request.userId,
         amount: 0,
         type: "WITHDRAW_APPROVED",
-<<<<<<< HEAD
         comment: `Вывод #${request.id} одобрен. Сумма: ${money(request.amount)}. Комиссия: ${money(request.commission)}. К получению: ${money(request.payoutAmount)}`,
       },
     });
@@ -2679,18 +2762,8 @@ async function approveWithdraw(interaction, requestId) {
   });
 
   if (!approved) {
-    return interaction.reply({ content: "Эта заявка уже обработана.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Эта заявка уже обработана.", ephemeral: true });
   }
-=======
-        comment: `Вывод #${request.id} одобрен. Сумма: ${money(
-          request.amount
-        )}. Комиссия: ${money(request.commission)}. К получению: ${money(
-          request.payoutAmount
-        )}`,
-      },
-    }),
-  ]);
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 
   if (request.ticketChannelId) {
     const ticketChannel = await client.channels
@@ -2727,7 +2800,7 @@ async function approveWithdraw(interaction, requestId) {
     ]
   );
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content:
       `✅ Вывод #${request.id} одобрен.\n` +
       `Игроку к выплате: **${money(request.payoutAmount)}**.`,
@@ -2748,20 +2821,19 @@ async function rejectWithdraw(interaction, requestId) {
   });
 
   if (!request) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Заявка на вывод не найдена.",
       ephemeral: true,
     });
   }
 
   if (request.status !== "PENDING") {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Эта заявка уже обработана.",
       ephemeral: true,
     });
   }
 
-<<<<<<< HEAD
   const rejected = await prisma.$transaction(async (tx) => {
     const lock = await tx.withdrawRequest.updateMany({
       where: { id: request.id, status: "PENDING" },
@@ -2776,66 +2848,29 @@ async function rejectWithdraw(interaction, requestId) {
     });
 
     await tx.transaction.create({
-=======
-  await prisma.$transaction([
-    prisma.withdrawRequest.update({
-      where: {
-        id: request.id,
-      },
-      data: {
-        status: "REJECTED",
-        processedBy: interaction.user.id,
-        processedAt: new Date(),
-      },
-    }),
-
-    prisma.user.update({
-      where: {
-        id: request.userId,
-      },
-      data: {
-        balance: {
-          increment: request.amount,
-        },
-      },
-    }),
-
-    prisma.transaction.create({
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       data: {
         userId: request.userId,
         amount: request.amount,
         type: "WITHDRAW_REFUND",
         comment: `Возврат средств по отклонённому выводу #${request.id}`,
       },
-<<<<<<< HEAD
     });
 
     await tx.transaction.create({
-=======
-    }),
-
-    prisma.transaction.create({
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       data: {
         userId: request.userId,
         amount: 0,
         type: "WITHDRAW_REJECTED",
         comment: `Вывод #${request.id} отклонён модератором ${interaction.user.username}`,
       },
-<<<<<<< HEAD
     });
 
     return true;
   });
 
   if (!rejected) {
-    return interaction.reply({ content: "Эта заявка уже обработана.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Эта заявка уже обработана.", ephemeral: true });
   }
-=======
-    }),
-  ]);
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 
   if (request.ticketChannelId) {
     const ticketChannel = await client.channels
@@ -2870,7 +2905,7 @@ async function rejectWithdraw(interaction, requestId) {
     ]
   );
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content: `❌ Вывод #${request.id} отклонён. Игроку возвращено **${money(
       request.amount
     )}**.`,
@@ -2889,7 +2924,7 @@ async function closeTicket(interaction, requestId) {
   });
 
   if (!request) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Заявка не найдена.",
       ephemeral: true,
     });
@@ -2899,13 +2934,13 @@ async function closeTicket(interaction, requestId) {
   const isModerator = isAdmin(interaction);
 
   if (!isOwner && !isModerator) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "⛔ Закрыть этот тикет может только владелец заявки или модератор.",
       ephemeral: true,
     });
   }
 
-  await interaction.reply({
+  await respondInteraction(interaction, {
     content: "🔒 Тикет будет закрыт через 5 секунд.",
   });
 
@@ -2931,7 +2966,7 @@ async function closeWithdrawTicket(interaction, requestId) {
   });
 
   if (!request) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Заявка на вывод не найдена.",
       ephemeral: true,
     });
@@ -2941,13 +2976,13 @@ async function closeWithdrawTicket(interaction, requestId) {
   const isModerator = isAdmin(interaction);
 
   if (!isOwner && !isModerator) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "⛔ Закрыть этот тикет может только владелец заявки или модератор.",
       ephemeral: true,
     });
   }
 
-  await interaction.reply({
+  await respondInteraction(interaction, {
     content: "🔒 Тикет вывода будет закрыт через 5 секунд.",
   });
 
@@ -2981,7 +3016,7 @@ async function showAdminTopUps(interaction) {
   });
 
   if (requests.length === 0) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Активных заявок на пополнение сейчас нет.",
       ephemeral: true,
     });
@@ -3019,27 +3054,19 @@ async function showAdminTopUps(interaction) {
         .setCustomId(`topup_approve:${request.id}`)
         .setLabel(`✅ Одобрить #${request.id}`)
         .setStyle(ButtonStyle.Success)
-<<<<<<< HEAD
         .setDisabled(["APPROVED", "REJECTED"].includes(request.status)),
-=======
-        .setDisabled(request.status !== "PENDING"),
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 
       new ButtonBuilder()
         .setCustomId(`topup_reject:${request.id}`)
         .setLabel(`❌ Отклонить #${request.id}`)
         .setStyle(ButtonStyle.Danger)
-<<<<<<< HEAD
         .setDisabled(["APPROVED", "REJECTED"].includes(request.status))
-=======
-        .setDisabled(request.status !== "PENDING")
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
     );
 
     components.push(row);
   }
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     embeds,
     components,
     ephemeral: true,
@@ -3063,7 +3090,7 @@ async function showAdminWithdraws(interaction) {
   });
 
   if (requests.length === 0) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Активных заявок на вывод сейчас нет.",
       ephemeral: true,
     });
@@ -3110,7 +3137,7 @@ async function showAdminWithdraws(interaction) {
     components.push(row);
   }
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     embeds,
     components,
     ephemeral: true,
@@ -3121,7 +3148,7 @@ async function showEventStats(interaction, eventId) {
   const event = await fullEvent(eventId);
 
   if (!event) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Событие не найдено.",
       ephemeral: true,
     });
@@ -3146,13 +3173,12 @@ async function showEventStats(interaction, eventId) {
       ].join("\n")
     );
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     embeds: [e],
     ephemeral: true,
   });
 }
 
-<<<<<<< HEAD
 
 function adminEventEditModal(event) {
   const option1 = event.options?.[0];
@@ -3254,9 +3280,9 @@ async function adminApplyEventEdit(interaction, eventId) {
   if (await adminOnly(interaction)) return;
 
   const event = await fullEvent(eventId);
-  if (!event) return interaction.reply({ content: "Событие не найдено.", ephemeral: true });
+  if (!event) return respondInteraction(interaction, { content: "Событие не найдено.", ephemeral: true });
   if (["FINISHED", "CANCELLED"].includes(event.status)) {
-    return interaction.reply({ content: "Завершённые или отменённые события нельзя редактировать.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Завершённые или отменённые события нельзя редактировать.", ephemeral: true });
   }
 
   const title = interaction.fields.getTextInputValue("title").trim();
@@ -3281,7 +3307,7 @@ async function adminApplyEventEdit(interaction, eventId) {
   if (minutesRaw) {
     const minutes = Number(minutesRaw);
     if (!Number.isInteger(minutes) || minutes <= 0) {
-      return interaction.reply({ content: "Время должно быть целым числом больше 0.", ephemeral: true });
+      return respondInteraction(interaction, { content: "Время должно быть целым числом больше 0.", ephemeral: true });
     }
     eventData.closesAt = new Date(Date.now() + minutes * 60 * 1000);
     changes.push(`Закрытие ставок: через ${minutes} мин.`);
@@ -3290,9 +3316,9 @@ async function adminApplyEventEdit(interaction, eventId) {
   const optionUpdates = [];
   if (oddsRaw) {
     const parts = oddsRaw.split(/[\/|,;]/).map((v) => Number(String(v).trim())).filter((v) => !Number.isNaN(v));
-    if (parts.length >= 1 && parts[0] <= 1) return interaction.reply({ content: "Коэффициент П1 должен быть больше 1.00.", ephemeral: true });
-    if (parts.length >= 2 && parts[1] <= 1) return interaction.reply({ content: "Коэффициент X должен быть больше 1.00.", ephemeral: true });
-    if (parts.length >= 3 && parts[2] <= 1) return interaction.reply({ content: "Коэффициент П2 должен быть больше 1.00.", ephemeral: true });
+    if (parts.length >= 1 && parts[0] <= 1) return respondInteraction(interaction, { content: "Коэффициент П1 должен быть больше 1.00.", ephemeral: true });
+    if (parts.length >= 2 && parts[1] <= 1) return respondInteraction(interaction, { content: "Коэффициент X должен быть больше 1.00.", ephemeral: true });
+    if (parts.length >= 3 && parts[2] <= 1) return respondInteraction(interaction, { content: "Коэффициент П2 должен быть больше 1.00.", ephemeral: true });
     if (parts[0] && event.options[0]) optionUpdates.push({ id: event.options[0].id, data: { odds: parts[0] }, text: `${event.options[0].title}: x${event.options[0].odds} → x${parts[0]}` });
     if (parts[1] && event.options[1]) optionUpdates.push({ id: event.options[1].id, data: { odds: parts[1] }, text: `${event.options[1].title}: x${event.options[1].odds} → x${parts[1]}` });
     if (parts[2] && event.options[2]) optionUpdates.push({ id: event.options[2].id, data: { odds: parts[2] }, text: `${event.options[2].title}: x${event.options[2].odds} → x${parts[2]}` });
@@ -3324,7 +3350,7 @@ async function adminApplyEventEdit(interaction, eventId) {
     { name: "Изменения", value: changes.length ? changes.join("\n").slice(0, 1024) : "Без изменений", inline: false },
   ], { channelId: interaction.channelId });
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content: changes.length ? `✅ Событие #${event.id} обновлено.\n${changes.map((c) => `• ${c}`).join("\n")}` : "Изменений нет.",
     ephemeral: true,
   });
@@ -3434,20 +3460,20 @@ async function adminApplyCreateEvent(interaction) {
   const minutes = Number(minutesRaw);
 
   if (names.length < 2 || names.length > 3) {
-    return interaction.reply({ content: "Укажи 2 или 3 исхода через /. Например: США / X / Парагвай", ephemeral: true });
+    return respondInteraction(interaction, { content: "Укажи 2 или 3 исхода через /. Например: США / X / Парагвай", ephemeral: true });
   }
 
   if (odds.length !== names.length || odds.some((value) => value <= 1)) {
-    return interaction.reply({ content: "Количество коэффициентов должно совпадать с исходами. Каждый коэффициент должен быть больше 1.00.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Количество коэффициентов должно совпадать с исходами. Каждый коэффициент должен быть больше 1.00.", ephemeral: true });
   }
 
   if (!Number.isInteger(minutes) || minutes <= 0) {
-    return interaction.reply({ content: "Время закрытия должно быть целым числом больше 0.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Время закрытия должно быть целым числом больше 0.", ephemeral: true });
   }
 
   const eventChannel = await client.channels.fetch(EVENT_CHANNEL_ID).catch(() => null);
   if (!eventChannel?.isTextBased()) {
-    return interaction.reply({ content: `⛔ Канал событий <#${EVENT_CHANNEL_ID}> не найден или бот не может туда писать.`, ephemeral: true });
+    return respondInteraction(interaction, { content: `⛔ Канал событий <#${EVENT_CHANNEL_ID}> не найден или бот не может туда писать.`, ephemeral: true });
   }
 
   const closesAt = new Date(Date.now() + minutes * 60 * 1000);
@@ -3484,7 +3510,7 @@ async function adminApplyCreateEvent(interaction) {
     { name: "Закрытие ставок", value: `<t:${unix(closesAt)}:R>`, inline: true },
   ], { channelId: interaction.channelId });
 
-  return interaction.reply({ content: `✅ Событие #${event.id} создано и опубликовано в <#${EVENT_CHANNEL_ID}>. Баннер можно добавить через /event_edit или пересоздать событие через /event_create с attachment.`, ephemeral: true });
+  return respondInteraction(interaction, { content: `✅ Событие #${event.id} создано и опубликовано в <#${EVENT_CHANNEL_ID}>. Баннер можно добавить через /event_edit или пересоздать событие через /event_create с attachment.`, ephemeral: true });
 }
 
 async function adminApplyUserAction(interaction, action) {
@@ -3492,7 +3518,7 @@ async function adminApplyUserAction(interaction, action) {
 
   const discordId = interaction.fields.getTextInputValue("discordId").trim().replace(/[<@!>]/g, "");
   if (!/^\d{15,25}$/.test(discordId)) {
-    return interaction.reply({ content: "Укажи корректный Discord ID пользователя.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Укажи корректный Discord ID пользователя.", ephemeral: true });
   }
 
   const member = await interaction.guild.members.fetch(discordId).catch(() => null);
@@ -3504,18 +3530,18 @@ async function adminApplyUserAction(interaction, action) {
 
   const amount = Number(interaction.fields.getTextInputValue("amount"));
   if (!Number.isInteger(amount) || amount < 0) {
-    return interaction.reply({ content: "Сумма должна быть целым числом 0 или больше.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Сумма должна быть целым числом 0 или больше.", ephemeral: true });
   }
 
   if (action === "add") {
-    if (amount <= 0) return interaction.reply({ content: "Сумма начисления должна быть больше 0.", ephemeral: true });
+    if (amount <= 0) return respondInteraction(interaction, { content: "Сумма начисления должна быть больше 0.", ephemeral: true });
     const user = await userOf(targetUser);
     await prisma.$transaction([
       prisma.user.update({ where: { id: user.id }, data: { balance: { increment: amount } } }),
       prisma.transaction.create({ data: { userId: user.id, amount, type: "ADMIN_ADD", comment: `Администратор ${interaction.user.username} начислил баланс через кнопку.` } }),
     ]);
     await log("ADMIN_ADD", "➕ Баланс начислен", `Администратор <@${interaction.user.id}> начислил <@${targetUser.id}> ${money(amount)}.`, [{ name: "Сумма", value: money(amount), inline: true }], { channelId: interaction.channelId });
-    return interaction.reply({ content: `✅ <@${targetUser.id}> начислено **${money(amount)}**.`, ephemeral: true });
+    return respondInteraction(interaction, { content: `✅ <@${targetUser.id}> начислено **${money(amount)}**.`, ephemeral: true });
   }
 
   if (action === "remove") return removeUserBalance(interaction, targetUser, amount);
@@ -3543,16 +3569,13 @@ async function showAdminEventsMenu(interaction) {
     new ButtonBuilder().setCustomId("admin_back_main").setLabel("⬅️ Назад").setStyle(ButtonStyle.Secondary)
   );
 
-  return interaction.reply({ embeds: [e], components: [r1], ephemeral: true });
+  return respondInteraction(interaction, { embeds: [e], components: [r1], ephemeral: true });
 }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 async function showAdminEvents(interaction) {
   if (await adminOnly(interaction)) return;
 
   const events = await prisma.rpEvent.findMany({
-<<<<<<< HEAD
     where: { status: { in: ["OPEN", "LIVE"] } },
     orderBy: { id: "desc" },
     take: 5,
@@ -3560,10 +3583,10 @@ async function showAdminEvents(interaction) {
   });
 
   if (events.length === 0) {
-    return interaction.reply({ content: "Сейчас нет активных событий.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Сейчас нет активных событий.", ephemeral: true });
   }
 
-  await interaction.reply({ content: `📢 **Активные события LS BET:** ${events.length}\nКаждое событие отправлено отдельной карточкой, чтобы поддерживать П1 / X / П2.`, ephemeral: true });
+  await respondInteraction(interaction, { content: `📢 **Активные события LS BET:** ${events.length}\nКаждое событие отправлено отдельной карточкой, чтобы поддерживать П1 / X / П2.`, ephemeral: true });
 
   for (const event of events) {
     const optionsText = (event.options || [])
@@ -3582,66 +3605,10 @@ async function showAdminEvents(interaction) {
 
     const finishRow = new ActionRowBuilder();
     finishRow.addComponents(
-=======
-    where: {
-      status: {
-        in: ["OPEN", "LIVE"],
-      },
-    },
-    orderBy: {
-      id: "desc",
-    },
-    take: 5,
-    include: {
-      options: {
-        orderBy: {
-          id: "asc",
-        },
-        include: {
-          bets: true,
-        },
-      },
-    },
-  });
-
-  if (events.length === 0) {
-    return interaction.reply({
-      content: "Сейчас нет активных событий.",
-      ephemeral: true,
-    });
-  }
-
-  const embeds = [];
-  const components = [];
-
-  for (const event of events) {
-    const option1 = event.options[0];
-    const option2 = event.options[1];
-
-    const e = embed(
-      event.status === "OPEN" ? LS_THEME.green : LS_THEME.red
-    )
-      .setTitle(`Событие #${event.id}: ${event.title}`)
-      .setDescription(
-        [
-          `**Статус:** ${statusEvent(event.status)}`,
-          `**Банк:** ${money(eventBank(event))}`,
-          `**Закрытие ставок:** <t:${unix(event.closesAt)}:R>`,
-          "",
-          `1️⃣ ${option1 ? option1.title : "Исход 1"}`,
-          `2️⃣ ${option2 ? option2.title : "Исход 2"}`,
-        ].join("\n")
-      );
-
-    embeds.push(e);
-
-    const row = new ActionRowBuilder().addComponents(
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       new ButtonBuilder()
         .setCustomId(`admin_live:${event.id}`)
         .setLabel("🔴 LIVE")
         .setStyle(ButtonStyle.Danger)
-<<<<<<< HEAD
         .setDisabled(event.status !== "OPEN")
     );
 
@@ -3670,46 +3637,15 @@ async function showAdminEvents(interaction) {
         .setDisabled(event.status === "FINISHED" || event.status === "CANCELLED")
     );
 
-    await interaction.followUp({ embeds: [e], components: [finishRow, manageRow], ephemeral: true });
+    await followUpInteraction(interaction, { embeds: [e], components: [finishRow, manageRow], ephemeral: true });
   }
 }
 
 async function showUserInfo(interaction, targetDiscordUser) {
   if (!interaction.deferred && !interaction.replied) {
-    await interaction.deferReply({ ephemeral: true });
+    await deferInteractionReply(interaction, { ephemeral: true });
   }
 
-=======
-        .setDisabled(event.status !== "OPEN"),
-
-      new ButtonBuilder()
-        .setCustomId(`admin_finish:${event.id}:1`)
-        .setLabel("🏆 Победил 1")
-        .setStyle(ButtonStyle.Success),
-
-      new ButtonBuilder()
-        .setCustomId(`admin_finish:${event.id}:2`)
-        .setLabel("🏆 Победил 2")
-        .setStyle(ButtonStyle.Success),
-
-      new ButtonBuilder()
-        .setCustomId(`admin_refresh:${event.id}`)
-        .setLabel("🔄 Обновить")
-        .setStyle(ButtonStyle.Secondary)
-    );
-
-    components.push(row);
-  }
-
-  return interaction.reply({
-    embeds,
-    components,
-    ephemeral: true,
-  });
-}
-
-async function showUserInfo(interaction, targetDiscordUser) {
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
   const user = await userOf(targetDiscordUser);
 
   const totalBets = await prisma.bet.count({
@@ -3813,7 +3749,6 @@ async function showUserInfo(interaction, targetDiscordUser) {
         inline: true,
       },
       {
-<<<<<<< HEAD
         name: "Статус регистрации",
         value: registrationStatusName(user.registrationStatus),
         inline: true,
@@ -3834,8 +3769,6 @@ async function showUserInfo(interaction, targetDiscordUser) {
         inline: true,
       },
       {
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
         name: "Всего ставок",
         value: String(totalBets),
         inline: true,
@@ -3901,7 +3834,7 @@ async function setUserBalance(interaction, targetDiscordUser, amount) {
   if (await adminOnly(interaction)) return;
 
   if (!Number.isInteger(amount) || amount < 0) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Баланс должен быть числом 0 или больше.",
       ephemeral: true,
     });
@@ -3933,7 +3866,7 @@ async function setUserBalance(interaction, targetDiscordUser, amount) {
     }),
   ]);
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content:
       `✅ Баланс игрока <@${targetDiscordUser.id}> установлен.\n` +
       `Было: **${money(oldBalance)}**\n` +
@@ -3946,7 +3879,7 @@ async function removeUserBalance(interaction, targetDiscordUser, amount) {
   if (await adminOnly(interaction)) return;
 
   if (!Number.isInteger(amount) || amount <= 0) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Сумма списания должна быть больше 0.",
       ephemeral: true,
     });
@@ -3976,7 +3909,7 @@ async function removeUserBalance(interaction, targetDiscordUser, amount) {
     }),
   ]);
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content:
       `✅ У игрока <@${targetDiscordUser.id}> списано **${money(
         removeAmount
@@ -4003,7 +3936,7 @@ async function showAdminUsers(interaction) {
   });
 
   if (users.length === 0) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Пользователей пока нет.",
       ephemeral: true,
     });
@@ -4044,7 +3977,7 @@ async function showAdminUsers(interaction) {
     .setTitle("👥 LS Bet — список игроков")
     .setDescription(text.slice(0, 4000));
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     embeds: [e],
     ephemeral: true,
   });
@@ -4060,14 +3993,14 @@ async function adminSetEventLive(interaction, eventId) {
   });
 
   if (!event) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Событие не найдено.",
       ephemeral: true,
     });
   }
 
   if (event.status !== "OPEN") {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "В LIVE можно перевести только открытое событие.",
       ephemeral: true,
     });
@@ -4084,14 +4017,11 @@ async function adminSetEventLive(interaction, eventId) {
 
   await updateEventMessage(eventId);
 
-<<<<<<< HEAD
   await log("EVENT_MANUAL_LIVE", "🔴 Событие переведено в LIVE", `Администратор <@${interaction.user.id}> закрыл ставки по событию #${event.id}.`, [
     { name: "Событие", value: event.title, inline: false },
   ], { channelId: interaction.channelId });
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content: `🔴 Событие **${event.title}** переведено в LIVE. Ставки закрыты.`,
     ephemeral: true,
   });
@@ -4114,14 +4044,14 @@ async function adminFinishEvent(interaction, eventId, winnerNumber) {
   });
 
   if (!event) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Событие не найдено.",
       ephemeral: true,
     });
   }
 
   if (event.status === "FINISHED") {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Это событие уже завершено.",
       ephemeral: true,
     });
@@ -4130,7 +4060,7 @@ async function adminFinishEvent(interaction, eventId, winnerNumber) {
   const winnerOption = event.options[winnerNumber - 1];
 
   if (!winnerOption) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Победный исход не найден.",
       ephemeral: true,
     });
@@ -4223,7 +4153,6 @@ async function adminFinishEvent(interaction, eventId, winnerNumber) {
   await updateEventMessage(event.id);
   await publishEventResult(event, winnerOption, winnersCount, totalPaid);
 
-<<<<<<< HEAD
   await log("EVENT_FINISHED", "🏁 Cобытие завершено", `Администратор <@${interaction.user.id}> завершил событие #${event.id}.`, [
     { name: "Событие", value: event.title, inline: false },
     { name: "Победный исход", value: winnerOption.title, inline: true },
@@ -4231,9 +4160,7 @@ async function adminFinishEvent(interaction, eventId, winnerNumber) {
     { name: "Выплачено", value: money(totalPaid), inline: true },
   ], { channelId: interaction.channelId });
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content:
       `✅ **Событие завершено**\n` +
       `Событие: **${event.title}**\n` +
@@ -4244,7 +4171,6 @@ async function adminFinishEvent(interaction, eventId, winnerNumber) {
     ephemeral: true,
   });
 }
-<<<<<<< HEAD
 
 async function adminCancelEvent(interaction, eventId, reason) {
   if (await adminOnly(interaction)) return;
@@ -4258,15 +4184,15 @@ async function adminCancelEvent(interaction, eventId, reason) {
   });
 
   if (!event) {
-    return interaction.reply({ content: "Событие не найдено.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Событие не найдено.", ephemeral: true });
   }
 
   if (event.status === "FINISHED") {
-    return interaction.reply({ content: "Завершённое событие нельзя отменить. Используй отдельный ручной разбор.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Завершённое событие нельзя отменить. Используй отдельный ручной разбор.", ephemeral: true });
   }
 
   if (event.status === "CANCELLED") {
-    return interaction.reply({ content: "Это событие уже отменено.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Это событие уже отменено.", ephemeral: true });
   }
 
   let refundedCount = 0;
@@ -4326,7 +4252,7 @@ async function adminCancelEvent(interaction, eventId, reason) {
     { name: "Сумма возврата", value: money(totalRefunded), inline: true },
   ], { channelId: interaction.channelId });
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content:
       `⚠️ **Событие отменено**\n` +
       `Событие: **${event.title}**\n` +
@@ -4338,8 +4264,6 @@ async function adminCancelEvent(interaction, eventId, reason) {
   });
 }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 function coinSideName(side) {
   if (side === "HEADS") return "Орёл";
   if (side === "TAILS") return "Решка";
@@ -4493,14 +4417,14 @@ async function getCoinflipGame(gameId) {
 
 async function createCoinflipGame(interaction, side, amount) {
   if (interaction.channelId !== COINFLIP_CHANNEL_ID) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: `🪙 Coinflip можно создавать только в канале <#${COINFLIP_CHANNEL_ID}>.`,
       ephemeral: true,
     });
   }
 
   if (!Number.isInteger(amount) || amount <= 0) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Введи корректную сумму.",
       ephemeral: true,
     });
@@ -4508,31 +4432,10 @@ async function createCoinflipGame(interaction, side, amount) {
 
   const user = await userOf(interaction.user);
 
-<<<<<<< HEAD
   let game;
   try {
     game = await prisma.$transaction(async (tx) => {
       await decrementBalanceOrThrow(tx, user.id, amount);
-=======
-  if (user.balance < amount) {
-    return interaction.reply({
-      content: `Недостаточно средств. Твой баланс: **${money(user.balance)}**.`,
-      ephemeral: true,
-    });
-  }
-
-  const game = await prisma.$transaction(async (tx) => {
-    await tx.user.update({
-      where: {
-        id: user.id,
-      },
-      data: {
-        balance: {
-          decrement: amount,
-        },
-      },
-    });
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 
     await tx.transaction.create({
       data: {
@@ -4543,7 +4446,6 @@ async function createCoinflipGame(interaction, side, amount) {
       },
     });
 
-<<<<<<< HEAD
       await addJackpotContribution(tx, user.id, "COINFLIP_CREATE", null, amount);
 
       return tx.coinflipGame.create({
@@ -4565,31 +4467,13 @@ async function createCoinflipGame(interaction, side, amount) {
   } catch (error) {
     if (isInsufficientBalance(error)) {
       const freshUser = await prisma.user.findUnique({ where: { id: user.id } });
-      return interaction.reply({
+      return respondInteraction(interaction, {
         content: `Недостаточно средств. Твой баланс: **${money(freshUser?.balance || 0)}**.`,
         ephemeral: true,
       });
     }
     throw error;
   }
-=======
-    return tx.coinflipGame.create({
-      data: {
-        creatorUserId: user.id,
-        amount,
-        creatorSide: side,
-        opponentSide: oppositeSide(side),
-        status: "WAITING",
-        channelId: interaction.channelId,
-      },
-      include: {
-        creator: true,
-        opponent: true,
-        winner: true,
-      },
-    });
-  });
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 
   const message = await interaction.channel.send({
     content: "🪙 **Новая игра Coinflip**",
@@ -4606,7 +4490,6 @@ async function createCoinflipGame(interaction, side, amount) {
     },
   });
 
-<<<<<<< HEAD
   await log("COINFLIP_CREATE", "🪙 Coinflip создан", `Игрок <@${interaction.user.id}> создал Coinflip #${game.id}.`, [
     { name: "Сторона", value: coinSideName(side), inline: true },
     { name: "Ставка", value: money(amount), inline: true },
@@ -4614,9 +4497,7 @@ async function createCoinflipGame(interaction, side, amount) {
     { name: "Канал", value: `<#${interaction.channelId}>`, inline: true },
   ], { userId: user.id, channelId: interaction.channelId });
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content: `✅ Coinflip создан на сумму **${money(amount)}**.`,
     ephemeral: true,
   });
@@ -4650,21 +4531,21 @@ async function acceptCoinflip(interaction, gameId) {
   const game = await getCoinflipGame(gameId);
 
   if (!game) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Coinflip не найден.",
       ephemeral: true,
     });
   }
 
   if (game.status !== "WAITING") {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Эта игра уже недоступна.",
       ephemeral: true,
     });
   }
 
   if (game.creator.discordId === interaction.user.id) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Нельзя принять свою же игру.",
       ephemeral: true,
     });
@@ -4673,7 +4554,7 @@ async function acceptCoinflip(interaction, gameId) {
   const opponent = await userOf(interaction.user);
 
   if (opponent.balance < game.amount) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: `Недостаточно средств. Твой баланс: **${money(opponent.balance)}**.`,
       ephemeral: true,
     });
@@ -4687,7 +4568,6 @@ async function acceptCoinflip(interaction, gameId) {
 
   const bank = game.amount * 2;
 
-<<<<<<< HEAD
   try {
     await prisma.$transaction(async (tx) => {
       const lock = await tx.coinflipGame.updateMany({
@@ -4742,12 +4622,12 @@ async function acceptCoinflip(interaction, gameId) {
     });
   } catch (error) {
     if (error?.code === "COINFLIP_UNAVAILABLE") {
-      return interaction.reply({ content: "Эта игра уже недоступна.", ephemeral: true });
+      return respondInteraction(interaction, { content: "Эта игра уже недоступна.", ephemeral: true });
     }
 
     if (isInsufficientBalance(error)) {
       const freshOpponent = await prisma.user.findUnique({ where: { id: opponent.id } });
-      return interaction.reply({
+      return respondInteraction(interaction, {
         content: `Недостаточно средств. Твой баланс: **${money(freshOpponent?.balance || 0)}**.`,
         ephemeral: true,
       });
@@ -4766,69 +4646,8 @@ async function acceptCoinflip(interaction, gameId) {
     { name: "Победитель", value: `<@${winnerDiscordId}>`, inline: true },
     { name: "Банк", value: money(bank), inline: true },
   ], { userId: winnerUserId, channelId: interaction.channelId });
-=======
-  await prisma.$transaction(async (tx) => {
-    await tx.user.update({
-      where: {
-        id: opponent.id,
-      },
-      data: {
-        balance: {
-          decrement: game.amount,
-        },
-      },
-    });
 
-    await tx.transaction.create({
-      data: {
-        userId: opponent.id,
-        amount: -game.amount,
-        type: "COINFLIP_ACCEPT",
-        comment: `Принятие Coinflip #${game.id}`,
-      },
-    });
-
-    await tx.user.update({
-      where: {
-        id: winnerUserId,
-      },
-      data: {
-        balance: {
-          increment: bank,
-        },
-      },
-    });
-
-    await tx.transaction.create({
-      data: {
-        userId: winnerUserId,
-        amount: bank,
-        type: "COINFLIP_WIN",
-        comment: `Победа в Coinflip #${game.id}. Выпало: ${coinSideName(
-          resultSide
-        )}`,
-      },
-    });
-
-    await tx.coinflipGame.update({
-      where: {
-        id: game.id,
-      },
-      data: {
-        opponentUserId: opponent.id,
-        winnerUserId,
-        resultSide,
-        opponentSide: oppositeSide(game.creatorSide),
-        status: "FINISHED",
-        finishedAt: new Date(),
-      },
-    });
-  });
-
-  await updateCoinflipMessage(game.id);
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content:
       `🏁 **Coinflip завершён**\n` +
       `Выпало: **${coinSideName(resultSide)}**\n` +
@@ -4841,14 +4660,14 @@ async function cancelCoinflip(interaction, gameId) {
   const game = await getCoinflipGame(gameId);
 
   if (!game) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Coinflip не найден.",
       ephemeral: true,
     });
   }
 
   if (game.status !== "WAITING") {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Эту игру уже нельзя отменить.",
       ephemeral: true,
     });
@@ -4858,13 +4677,12 @@ async function cancelCoinflip(interaction, gameId) {
   const isModerator = isAdmin(interaction);
 
   if (!isOwner && !isModerator) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Отменить Coinflip может только создатель или модератор.",
       ephemeral: true,
     });
   }
 
-<<<<<<< HEAD
   const cancelled = await prisma.$transaction(async (tx) => {
     const lock = await tx.coinflipGame.updateMany({
       where: { id: game.id, status: "WAITING" },
@@ -4879,35 +4697,19 @@ async function cancelCoinflip(interaction, gameId) {
     });
 
     await tx.transaction.create({
-=======
-  await prisma.$transaction([
-    prisma.user.update({
-      where: {
-        id: game.creatorUserId,
-      },
-      data: {
-        balance: {
-          increment: game.amount,
-        },
-      },
-    }),
-
-    prisma.transaction.create({
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       data: {
         userId: game.creatorUserId,
         amount: game.amount,
         type: "COINFLIP_REFUND",
         comment: `Возврат за отмену Coinflip #${game.id}`,
       },
-<<<<<<< HEAD
     });
 
     return true;
   });
 
   if (!cancelled) {
-    return interaction.reply({ content: "Эту игру уже нельзя отменить.", ephemeral: true });
+    return respondInteraction(interaction, { content: "Эту игру уже нельзя отменить.", ephemeral: true });
   }
 
   await updateCoinflipMessage(game.id);
@@ -4917,24 +4719,7 @@ async function cancelCoinflip(interaction, gameId) {
     { name: "Возврат", value: money(game.amount), inline: true },
   ], { userId: game.creatorUserId, channelId: interaction.channelId });
 
-=======
-    }),
-
-    prisma.coinflipGame.update({
-      where: {
-        id: game.id,
-      },
-      data: {
-        status: "CANCELLED",
-        finishedAt: new Date(),
-      },
-    }),
-  ]);
-
-  await updateCoinflipMessage(game.id);
-
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content: `❌ Coinflip #${game.id} отменён. Создателю возвращено **${money(
       game.amount
     )}**.`,
@@ -5206,21 +4991,21 @@ async function createPromoCode(interaction, codeRaw, amount, maxUsesRaw) {
       : null;
 
   if (!code || code.length < 3) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Код должен быть минимум 3 символа.",
       ephemeral: true,
     });
   }
 
   if (!Number.isInteger(amount) || amount <= 0) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Введи корректную сумму промокода.",
       ephemeral: true,
     });
   }
 
   if (maxUses !== null && (!Number.isInteger(maxUses) || maxUses <= 0)) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Лимит активаций должен быть числом больше 0.",
       ephemeral: true,
     });
@@ -5238,23 +5023,20 @@ async function createPromoCode(interaction, codeRaw, amount, maxUsesRaw) {
       },
     });
 
-<<<<<<< HEAD
     await log("PROMO_CREATED", "🎟️ Создан промокод", `Администратор <@${interaction.user.id}> создал обычный промокод.`, [
       { name: "Код", value: promo.code, inline: true },
       { name: "Сумма", value: money(amount), inline: true },
       { name: "Лимит", value: maxUses ? String(maxUses) : "Без лимита", inline: true },
     ], { channelId: interaction.channelId });
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: `✅ Обычный промокод **${promo.code}** создан. Сумма: **${money(
         amount
       )}**.`,
       ephemeral: true,
     });
   } catch (error) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Такой промокод уже существует.",
       ephemeral: true,
     });
@@ -5281,35 +5063,35 @@ async function createReferralPromoCode(
       : null;
 
   if (!code || code.length < 3) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Код должен быть минимум 3 символа.",
       ephemeral: true,
     });
   }
 
   if (!ownerDiscordId || !/^\d+$/.test(ownerDiscordId)) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Введи корректный Discord ID владельца.",
       ephemeral: true,
     });
   }
 
   if (!Number.isInteger(amount) || amount < 0) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Бонус новому игроку должен быть числом 0 или больше.",
       ephemeral: true,
     });
   }
 
   if (!Number.isInteger(refPercent) || refPercent < 1 || refPercent > 100) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Процент рефереру должен быть от 1 до 100.",
       ephemeral: true,
     });
   }
 
   if (maxUses !== null && (!Number.isInteger(maxUses) || maxUses <= 0)) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Лимит активаций должен быть числом больше 0.",
       ephemeral: true,
     });
@@ -5320,7 +5102,7 @@ async function createReferralPromoCode(
     .catch(() => null);
 
   if (!ownerDiscordUser) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Не смог найти пользователя Discord по этому ID.",
       ephemeral: true,
     });
@@ -5342,7 +5124,7 @@ async function createReferralPromoCode(
       },
     });
 
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content:
         `✅ Реферальный промокод **${promo.code}** создан.\n` +
         `Владелец: <@${ownerDiscordId}>\n` +
@@ -5351,7 +5133,7 @@ async function createReferralPromoCode(
       ephemeral: true,
     });
   } catch (error) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Такой промокод уже существует.",
       ephemeral: true,
     });
@@ -5379,7 +5161,7 @@ async function editPromoCode(
   });
 
   if (!promo) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: `❌ Промокод **${code}** не найден.`,
       ephemeral: true,
     });
@@ -5392,7 +5174,7 @@ async function editPromoCode(
     const amount = Number(amountRaw);
 
     if (!Number.isInteger(amount) || amount < 0) {
-      return interaction.reply({
+      return respondInteraction(interaction, {
         content: "❌ Сумма бонуса должна быть числом 0 или больше.",
         ephemeral: true,
       });
@@ -5406,7 +5188,7 @@ async function editPromoCode(
     const maxUses = Number(maxUsesRaw);
 
     if (!Number.isInteger(maxUses) || maxUses < 0) {
-      return interaction.reply({
+      return respondInteraction(interaction, {
         content: "❌ Лимит активаций должен быть числом 0 или больше.",
         ephemeral: true,
       });
@@ -5425,7 +5207,7 @@ async function editPromoCode(
     const activeValue = parseActiveValue(activeRaw);
 
     if (activeValue === "INVALID") {
-      return interaction.reply({
+      return respondInteraction(interaction, {
         content: "❌ Статус укажи так: `on` или `off`.",
         ephemeral: true,
       });
@@ -5462,7 +5244,7 @@ async function editPromoCode(
           : promo.refPercent || 5;
 
       if (!ownerDiscordId || !/^\d+$/.test(ownerDiscordId)) {
-        return interaction.reply({
+        return respondInteraction(interaction, {
           content:
             "❌ Рефералку укажи в формате:\n" +
             "`DiscordID:процент`\n\n" +
@@ -5475,7 +5257,7 @@ async function editPromoCode(
       }
 
       if (!Number.isInteger(refPercent) || refPercent < 1 || refPercent > 100) {
-        return interaction.reply({
+        return respondInteraction(interaction, {
           content: "❌ Процент рефералки должен быть от 1 до 100.",
           ephemeral: true,
         });
@@ -5486,7 +5268,7 @@ async function editPromoCode(
         .catch(() => null);
 
       if (!ownerDiscordUser) {
-        return interaction.reply({
+        return respondInteraction(interaction, {
           content: "❌ Не смог найти пользователя Discord по этому ID.",
           ephemeral: true,
         });
@@ -5505,7 +5287,7 @@ async function editPromoCode(
   }
 
   if (Object.keys(data).length === 0) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content:
         "Ты не указал, что изменить.\n\n" +
         "Заполни хотя бы одно поле: сумма, лимит, статус или рефералка.",
@@ -5523,7 +5305,7 @@ async function editPromoCode(
     },
   });
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content:
       `✅ Промокод **${updatedPromo.code}** изменён.\n\n` +
       changes.join("\n"),
@@ -5547,7 +5329,7 @@ async function deletePromoCode(interaction, codeRaw) {
   });
 
   if (!promo) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: `❌ Промокод **${code}** не найден.`,
       ephemeral: true,
     });
@@ -5569,7 +5351,7 @@ async function deletePromoCode(interaction, codeRaw) {
     });
   });
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content:
       `🗑️ Промокод **${promo.code}** удалён.\n` +
       `Удалено активаций: **${activationsCount}**.`,
@@ -5592,7 +5374,7 @@ async function showPromoStats(interaction) {
   });
 
   if (promos.length === 0) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Промокодов пока нет.",
       ephemeral: true,
     });
@@ -5630,7 +5412,7 @@ async function showPromoStats(interaction) {
     .setTitle("📊 Статистика промокодов")
     .setDescription(text.slice(0, 4000));
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     embeds: [e],
     ephemeral: true,
   });
@@ -5659,7 +5441,7 @@ async function showReferralStats(interaction) {
   });
 
   if (referralPromos.length === 0) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Реферальных промокодов пока нет.",
       ephemeral: true,
     });
@@ -5700,7 +5482,7 @@ async function showReferralStats(interaction) {
     .setTitle("📈 Статистика рефералов")
     .setDescription(text.slice(0, 4000));
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     embeds: [e],
     ephemeral: true,
   });
@@ -5710,7 +5492,7 @@ async function activatePromoCode(interaction, codeRaw) {
   const member = interaction.member;
 
   if (!member?.joinedTimestamp) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content:
         "Не удалось проверить дату входа на сервер. Проверь, что включён Server Members Intent.",
       ephemeral: true,
@@ -5721,7 +5503,7 @@ async function activatePromoCode(interaction, codeRaw) {
   const maxAgeMs = PROMO_NEW_USER_DAYS * 24 * 60 * 60 * 1000;
 
   if (Date.now() - joinedAt > maxAgeMs) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: `⛔ Этот промокод доступен только новым пользователям, которые зашли на сервер за последние ${PROMO_NEW_USER_DAYS} дня.`,
       ephemeral: true,
     });
@@ -5740,14 +5522,14 @@ async function activatePromoCode(interaction, codeRaw) {
   });
 
   if (!promo || !promo.isActive) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Промокод не найден или уже выключен.",
       ephemeral: true,
     });
   }
 
   if (promo.maxUses && promo.usesCount >= promo.maxUses) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Лимит активаций этого промокода уже закончился.",
       ephemeral: true,
     });
@@ -5761,7 +5543,7 @@ async function activatePromoCode(interaction, codeRaw) {
   });
 
   if (alreadyUsed) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Ты уже активировал этот промокод.",
       ephemeral: true,
     });
@@ -5769,21 +5551,21 @@ async function activatePromoCode(interaction, codeRaw) {
 
   if (promo.type === "REFERRAL") {
     if (!promo.ownerUserId || !promo.owner) {
-      return interaction.reply({
+      return respondInteraction(interaction, {
         content: "У этого реферального промокода не найден владелец.",
         ephemeral: true,
       });
     }
 
     if (promo.ownerUserId === user.id) {
-      return interaction.reply({
+      return respondInteraction(interaction, {
         content: "Нельзя активировать свой собственный реферальный промокод.",
         ephemeral: true,
       });
     }
 
     if (user.referredByUserId && user.referredByUserId !== promo.ownerUserId) {
-      return interaction.reply({
+      return respondInteraction(interaction, {
         content: "За тобой уже закреплён другой реферер. Сменить его нельзя.",
         ephemeral: true,
       });
@@ -5845,7 +5627,6 @@ async function activatePromoCode(interaction, codeRaw) {
     });
   });
 
-<<<<<<< HEAD
   await log("PROMO_ACTIVATED", "🎁 Промокод активирован", `Игрок <@${interaction.user.id}> активировал промокод **${promo.code}**.`, [
     { name: "Код", value: promo.code, inline: true },
     { name: "Тип", value: promo.type || "BONUS", inline: true },
@@ -5853,9 +5634,7 @@ async function activatePromoCode(interaction, codeRaw) {
     ...(promo.type === "REFERRAL" && promo.owner ? [{ name: "Реферер", value: `<@${promo.owner.discordId}>`, inline: true }] : []),
   ], { userId: user.id, channelId: interaction.channelId });
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content:
       promo.type === "REFERRAL"
         ? `✅ Реферальный промокод **${promo.code}** активирован.\nТы получил **${money(
@@ -6015,13 +5794,12 @@ function lotteryCustomModal() {
 }
 
 async function buyLotteryTicket(interaction, numbers) {
-<<<<<<< HEAD
   const send = async (payload) => {
     if (interaction.deferred || interaction.replied) {
       return interaction.editReply(payload);
     }
 
-    return interaction.reply({
+    return respondInteraction(interaction, {
       ...payload,
       ephemeral: true,
     });
@@ -6045,44 +5823,6 @@ async function buyLotteryTicket(interaction, numbers) {
       await decrementBalanceOrThrow(tx, user.id, LOTTERY_TICKET_PRICE);
 
       const createdTicket = await tx.lotteryTicket.create({
-=======
-  const user = await userOf(interaction.user);
-
-  const activeCount = await prisma.lotteryTicket.count({
-    where: {
-      userId: user.id,
-      status: "ACTIVE",
-    },
-  });
-
-  if (activeCount >= LOTTERY_MAX_TICKETS_PER_DRAW) {
-    return interaction.reply({
-      content: `⛔ У тебя уже максимум активных билетов: **${LOTTERY_MAX_TICKETS_PER_DRAW}**.`,
-      ephemeral: true,
-    });
-  }
-
-  if (user.balance < LOTTERY_TICKET_PRICE) {
-    return interaction.reply({
-      content: `Недостаточно средств. Твой баланс: **${money(user.balance)}**.`,
-      ephemeral: true,
-    });
-  }
-
-  const ticket = await prisma.$transaction(async (tx) => {
-    await tx.user.update({
-      where: {
-        id: user.id,
-      },
-      data: {
-        balance: {
-          decrement: LOTTERY_TICKET_PRICE,
-        },
-      },
-    });
-
-    const createdTicket = await tx.lotteryTicket.create({
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       data: {
         userId: user.id,
         numbers: numbersToString(numbers),
@@ -6102,7 +5842,6 @@ async function buyLotteryTicket(interaction, numbers) {
       },
     });
 
-<<<<<<< HEAD
       await addJackpotContribution(tx, user.id, "LOTTERY_TICKET", createdTicket.id, LOTTERY_TICKET_PRICE);
 
       return createdTicket;
@@ -6123,22 +5862,12 @@ async function buyLotteryTicket(interaction, numbers) {
   await maybeFinishJackpotWar();
 
   return send({
-=======
-    return createdTicket;
-  });
-
-  return interaction.reply({
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
     content:
       `✅ **Билет куплен**\n\n` +
       `Билет: **#${ticket.id}**\n` +
       `Числа: ${formatLotteryNumbers(numbers)}\n` +
       `Цена: **${money(LOTTERY_TICKET_PRICE)}**\n\n` +
       `Ожидай ближайший розыгрыш.`,
-<<<<<<< HEAD
-=======
-    ephemeral: true,
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
   });
 }
 
@@ -6156,7 +5885,7 @@ async function showMyLotteryTickets(interaction) {
   });
 
   if (tickets.length === 0) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "У тебя пока нет билетов лотереи.",
       ephemeral: true,
     });
@@ -6193,7 +5922,7 @@ async function showMyLotteryTickets(interaction) {
     .setTitle("🧾 Мои билеты лотереи")
     .setDescription(text.slice(0, 4000));
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     embeds: [e],
     ephemeral: true,
   });
@@ -6214,7 +5943,7 @@ async function showLastLotteryDraw(interaction, adminView = false) {
   });
 
   if (!draw) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Розыгрышей ещё не было.",
       ephemeral: true,
     });
@@ -6250,7 +5979,7 @@ async function showLastLotteryDraw(interaction, adminView = false) {
       ].join("\n")
     );
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     embeds: [e],
     ephemeral: !adminView,
   });
@@ -6312,7 +6041,7 @@ async function showActiveLotteryTickets(interaction) {
   });
 
   if (tickets.length === 0) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Активных билетов сейчас нет.",
       ephemeral: true,
     });
@@ -6330,7 +6059,7 @@ async function showActiveLotteryTickets(interaction) {
     .setTitle("📊 Активные билеты лотереи")
     .setDescription(text.slice(0, 4000));
 
-  return interaction.reply({
+  return respondInteraction(interaction, {
     embeds: [e],
     ephemeral: true,
   });
@@ -6349,7 +6078,7 @@ async function runLotteryDraw(interaction) {
   });
 
   if (tickets.length === 0) {
-    return interaction.reply({
+    return respondInteraction(interaction, {
       content: "Активных билетов для розыгрыша нет.",
       ephemeral: true,
     });
@@ -6361,7 +6090,6 @@ async function runLotteryDraw(interaction) {
   let winnersCount = 0;
   let totalPaid = 0;
 
-<<<<<<< HEAD
   let draw;
   try {
     draw = await prisma.$transaction(async (tx) => {
@@ -6377,9 +6105,6 @@ async function runLotteryDraw(interaction) {
       throw error;
     }
 
-=======
-  const draw = await prisma.$transaction(async (tx) => {
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
     const createdDraw = await tx.lotteryDraw.create({
       data: {
         numbers: resultNumbersString,
@@ -6430,12 +6155,11 @@ async function runLotteryDraw(interaction) {
       });
     }
 
-<<<<<<< HEAD
       return createdDraw;
     });
   } catch (error) {
     if (error?.code === "LOTTERY_DRAW_ALREADY_RUNNING") {
-      return interaction.reply({
+      return respondInteraction(interaction, {
         content: "Розыгрыш уже обрабатывается. Повторный запуск отменён.",
         ephemeral: true,
       });
@@ -6443,10 +6167,6 @@ async function runLotteryDraw(interaction) {
 
     throw error;
   }
-=======
-    return createdDraw;
-  });
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 
   const finishedTickets = await prisma.lotteryTicket.findMany({
     where: {
@@ -6502,7 +6222,6 @@ async function runLotteryDraw(interaction) {
     });
   }
 
-<<<<<<< HEAD
   await log("LOTTERY_DRAW", "🏆 Проведён розыгрыш лотереи", `Администратор <@${interaction.user.id}> провёл розыгрыш #${draw.id}.`, [
     { name: "Выигрышные числа", value: formatLotteryNumbers(resultNumbers), inline: true },
     { name: "Билетов", value: String(tickets.length), inline: true },
@@ -6510,9 +6229,7 @@ async function runLotteryDraw(interaction) {
     { name: "Выплачено", value: money(totalPaid), inline: true },
   ], { channelId: interaction.channelId });
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-  return interaction.reply({
+  return respondInteraction(interaction, {
     content:
       `✅ Розыгрыш проведён.\n` +
       `Результат: ${formatLotteryNumbers(resultNumbers)}\n` +
@@ -6528,10 +6245,8 @@ client.once(Events.ClientReady, async () => {
   console.log(`LS Bet Bot запущен как ${client.user.tag}`);
 
   await closeExpiredEvents();
-<<<<<<< HEAD
+  await recoverStaleCrashRounds();
   startCrashGameLoop().catch((error) => console.error("CRASH START ERROR:", error.message));
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 
   setInterval(async () => {
     try {
@@ -6542,7 +6257,6 @@ client.once(Events.ClientReady, async () => {
   }, 60 * 1000);
 });
 
-<<<<<<< HEAD
 client.on(Events.GuildMemberAdd, async (member) => {
   try {
     if (!WELCOME_DM_ENABLED || member.user?.bot) return;
@@ -6552,8 +6266,6 @@ client.on(Events.GuildMemberAdd, async (member) => {
   }
 });
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
 client.on(Events.MessageCreate, async (message) => {
   try {
     if (message.author.bot) return;
@@ -6572,11 +6284,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (!request) return;
 
     if (message.attachments.size === 0) {
-<<<<<<< HEAD
       await message.reply("📎 Счет для перевода 0301 0458 3. Прикрепи скриншот перевода файлом или картинкой.");
-=======
-      await message.reply("📎 Прикрепи скриншот перевода файлом или картинкой.");
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       return;
     }
 
@@ -6597,15 +6305,12 @@ client.on(Events.MessageCreate, async (message) => {
     );
 
     await sendTopUpModerationLog(request.id);
-<<<<<<< HEAD
 
     await log("TOPUP_SCREENSHOT", "📎 Скриншот пополнения загружен", `Игрок <@${request.user.discordId}> загрузил скриншот по заявке #${request.id}.`, [
       { name: "Сумма", value: money(request.amount), inline: true },
       { name: "Ticket", value: `<#${message.channelId}>`, inline: true },
       { name: "Файл", value: attachment.url, inline: false },
     ], { userId: request.userId, channelId: message.channelId });
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
   } catch (error) {
     console.error("Ошибка обработки скриншота:", error);
   }
@@ -6614,34 +6319,32 @@ client.on(Events.MessageCreate, async (message) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isChatInputCommand()) {
+      await deferInteractionReply(interaction, { ephemeral: true });
       if (interaction.commandName === "panel") {
         if (await adminOnly(interaction)) return;
-        return interaction.reply(mainPanel());
+        return respondInteraction(interaction, mainPanel());
       }
 
       if (interaction.commandName === "admin_panel") {
         if (await adminOnly(interaction)) return;
-        return interaction.reply(adminPanel());
+        return respondInteraction(interaction, adminPanel());
       }
 
-<<<<<<< HEAD
       if (interaction.commandName === "registration_panel") {
         if (await adminOnly(interaction)) return;
         const channelId = REGISTRATION_CHANNEL_ID || interaction.channelId;
         const channel = await client.channels.fetch(channelId).catch(() => null);
         if (!channel?.isTextBased()) {
-          return interaction.reply({ content: "⛔ Канал регистрации не найден или бот не может туда писать.", ephemeral: true });
+          return respondInteraction(interaction, { content: "⛔ Канал регистрации не найден или бот не может туда писать.", ephemeral: true });
         }
         await channel.send(registrationPanel());
-        return interaction.reply({ content: `✅ Панель регистрации опубликована в <#${channelId}>.`, ephemeral: true });
+        return respondInteraction(interaction, { content: `✅ Панель регистрации опубликована в <#${channelId}>.`, ephemeral: true });
       }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       if (interaction.commandName === "user_info") {
         if (await adminOnly(interaction)) return;
 
-        await interaction.deferReply({
+        await deferInteractionReply(interaction, {
           ephemeral: true,
         });
 
@@ -6678,12 +6381,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (await adminOnly(interaction)) return;
 
         if (interaction.channelId !== EVENT_CHANNEL_ID) {
-          return interaction.reply({
-<<<<<<< HEAD
+          return respondInteraction(interaction, {
             content: `⛔ Создавать события можно только в канале <#${EVENT_CHANNEL_ID}>.`,
-=======
-            content: `⛔ Создавать RP-события можно только в канале <#${EVENT_CHANNEL_ID}>.`,
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
             ephemeral: true,
           });
         }
@@ -6692,7 +6391,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const description = interaction.options.getString("description");
         const option1 = interaction.options.getString("option1");
         const odds1 = interaction.options.getNumber("odds1");
-<<<<<<< HEAD
         const option2 = interaction.options.getString("option2");
         const odds2 = interaction.options.getNumber("odds2");
         const option3 = interaction.options.getString("option3");
@@ -6701,33 +6399,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const minutes = interaction.options.getInteger("minutes");
 
         if (odds1 <= 1 || odds2 <= 1 || (odds3 !== null && odds3 !== undefined && odds3 <= 1)) {
-=======
-        const image1 = interaction.options.getAttachment("image1");
-        const option2 = interaction.options.getString("option2");
-        const odds2 = interaction.options.getNumber("odds2");
-        const image2 = interaction.options.getAttachment("image2");
-        const minutes = interaction.options.getInteger("minutes");
-
-        if (odds1 <= 1 || odds2 <= 1) {
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-          return interaction.reply({
+          return respondInteraction(interaction, {
             content: "Коэффициент должен быть больше 1.00.",
             ephemeral: true,
           });
         }
 
-<<<<<<< HEAD
         if ((option3 && !odds3) || (!option3 && odds3)) {
-          return interaction.reply({
+          return respondInteraction(interaction, {
             content: "Для третьего исхода нужно указать и название, и коэффициент.",
             ephemeral: true,
           });
         }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
         if (minutes <= 0) {
-          return interaction.reply({
+          return respondInteraction(interaction, {
             content: "Время закрытия ставок должно быть больше 0 минут.",
             ephemeral: true,
           });
@@ -6736,13 +6422,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const eventChannel = await client.channels.fetch(EVENT_CHANNEL_ID);
 
         if (!eventChannel || !eventChannel.isTextBased()) {
-          return interaction.reply({
+          return respondInteraction(interaction, {
             content:
-<<<<<<< HEAD
               "⛔ Канал для публикации событий не найден или бот не может туда писать.",
-=======
-              "⛔ Канал для публикации RP-событий не найден или бот не может туда писать.",
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
             ephemeral: true,
           });
         }
@@ -6759,22 +6441,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
             channelId: EVENT_CHANNEL_ID,
             options: {
               create: [
-<<<<<<< HEAD
                 { title: option1, odds: odds1, imageUrl: banner.url },
                 { title: option2, odds: odds2, imageUrl: banner.url },
                 ...(option3 ? [{ title: option3, odds: odds3, imageUrl: banner.url }] : []),
-=======
-                {
-                  title: option1,
-                  odds: odds1,
-                  imageUrl: image1.url,
-                },
-                {
-                  title: option2,
-                  odds: odds2,
-                  imageUrl: image2.url,
-                },
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
               ],
             },
           },
@@ -6806,7 +6475,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           },
         });
 
-<<<<<<< HEAD
         await log("EVENT_CREATED", "📢 Создано событие", `Администратор <@${interaction.user.id}> создал событие #${event.id}.`, [
           { name: "Событие", value: title, inline: false },
           { name: "Исход 1", value: `${option1} | x${odds1}`, inline: true },
@@ -6816,9 +6484,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           { name: "Канал", value: `<#${EVENT_CHANNEL_ID}>`, inline: true },
         ], { channelId: interaction.channelId });
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-        return interaction.reply({
+        return respondInteraction(interaction, {
           content: `✅ Событие создано и опубликовано в канале <#${EVENT_CHANNEL_ID}>.`,
           ephemeral: true,
         });
@@ -6833,7 +6499,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return adminFinishEvent(interaction, eventId, winnerNumber);
       }
 
-<<<<<<< HEAD
 
       if (interaction.commandName === "event_cancel") {
         if (await adminOnly(interaction)) return;
@@ -6844,8 +6509,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return adminCancelEvent(interaction, eventId, reason);
       }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       if (interaction.commandName === "add_balance") {
         if (await adminOnly(interaction)) return;
 
@@ -6853,7 +6516,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const amount = interaction.options.getInteger("amount");
 
         if (!amount || amount <= 0) {
-          return interaction.reply({
+          return respondInteraction(interaction, {
             content: "Сумма должна быть больше 0.",
             ephemeral: true,
           });
@@ -6883,21 +6546,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }),
         ]);
 
-<<<<<<< HEAD
         await log("ADMIN_ADD", "🛡 Админ начислил баланс", `Администратор <@${interaction.user.id}> начислил баланс игроку <@${targetDiscordUser.id}>.`, [
           { name: "Сумма", value: money(amount), inline: true },
         ], { userId: targetUser.id, channelId: interaction.channelId });
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-        return interaction.reply({
+        return respondInteraction(interaction, {
           content: `✅ <@${targetDiscordUser.id}> начислено **${money(amount)}**.`,
         });
       }
     }
 
     if (interaction.isButton()) {
-<<<<<<< HEAD
+      if (!buttonOpensModal(interaction.customId) && !buttonUsesMessageUpdate(interaction.customId)) {
+        await deferInteractionReply(interaction, { ephemeral: true });
+      }
       if (interaction.customId === "registration_start") {
         return interaction.showModal(registrationModal());
       }
@@ -6934,12 +6596,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.customId === "admin_users_panel") {
         if (await adminOnly(interaction)) return;
-        return interaction.reply(adminUsersPanel());
+        return respondInteraction(interaction, adminUsersPanel());
       }
 
       if (interaction.customId === "admin_back_main") {
         if (await adminOnly(interaction)) return;
-        return interaction.reply(adminPanel());
+        return respondInteraction(interaction, adminPanel());
       }
 
       if (interaction.customId === "admin_user_info_button") {
@@ -6970,15 +6632,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.customId === "admin_registration_panel_publish") {
         if (await adminOnly(interaction)) return;
         await interaction.channel.send(registrationPanel());
-        return interaction.reply({ content: "✅ Панель регистрации опубликована.", ephemeral: true });
+        return respondInteraction(interaction, { content: "✅ Панель регистрации опубликована.", ephemeral: true });
       }
 
-=======
-      if (interaction.customId === "admin_events") {
-        return showAdminEvents(interaction);
-      }
-
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       if (interaction.customId === "admin_topups") {
         return showAdminTopUps(interaction);
       }
@@ -6989,12 +6645,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.customId === "admin_promos") {
         if (await adminOnly(interaction)) return;
-        return interaction.reply(adminPromoPanel());
+        return respondInteraction(interaction, adminPromoPanel());
       }
 
       if (interaction.customId === "admin_lottery") {
         if (await adminOnly(interaction)) return;
-        return interaction.reply(adminLotteryPanel());
+        return respondInteraction(interaction, adminLotteryPanel());
       }
 
       if (interaction.customId === "admin_public_panel") {
@@ -7002,7 +6658,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await interaction.channel.send(mainPanel());
 
-        return interaction.reply({
+        return respondInteraction(interaction, {
           content: "✅ Главное меню опубликовано.",
           ephemeral: true,
         });
@@ -7049,12 +6705,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return showLastLotteryDraw(interaction, true);
       }
 
-<<<<<<< HEAD
       if (interaction.customId.startsWith("admin_event_edit:")) {
         if (await adminOnly(interaction)) return;
         const [, eventIdRaw] = interaction.customId.split(":");
         const event = await fullEvent(Number(eventIdRaw));
-        if (!event) return interaction.reply({ content: "Событие не найдено.", ephemeral: true });
+        if (!event) return respondInteraction(interaction, { content: "Событие не найдено.", ephemeral: true });
         return interaction.showModal(adminEventEditModal(event));
       }
 
@@ -7063,7 +6718,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const [, eventIdRaw] = interaction.customId.split(":");
         const eventId = Number(eventIdRaw);
 
-        await interaction.deferReply({ ephemeral: true });
+        await deferInteractionReply(interaction, { ephemeral: true });
 
         try {
           const result = await publishFacebrowserEvent(eventId);
@@ -7088,8 +6743,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.showModal(adminEventCancelModal(Number(eventIdRaw)));
       }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       if (interaction.customId.startsWith("admin_live:")) {
         const [, eventIdRaw] = interaction.customId.split(":");
         return adminSetEventLive(interaction, Number(eventIdRaw));
@@ -7113,7 +6766,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await updateEventMessage(eventId);
 
-        return interaction.reply({
+        return respondInteraction(interaction, {
           content: "🔄 Афиша обновлена.",
           ephemeral: true,
         });
@@ -7149,7 +6802,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return closeWithdrawTicket(interaction, Number(requestIdRaw));
       }
 
-<<<<<<< HEAD
       if (interaction.customId === "panel_crash" || interaction.customId === "crash_refresh") {
         return showCrashPanel(interaction);
       }
@@ -7176,8 +6828,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return showCrashHistory(interaction);
       }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       if (interaction.customId === "panel_profile") {
         return showProfile(interaction);
       }
@@ -7186,7 +6836,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return showEvents(interaction);
       }
 
-<<<<<<< HEAD
       if (interaction.customId === "panel_jackpot" || interaction.customId === "jackpot_refresh") {
         return jackpotWarPanel(interaction);
       }
@@ -7196,8 +6845,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return jackpotWarPanel(interaction);
       }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       if (interaction.customId === "panel_mybets") {
         return showMyBets(interaction);
       }
@@ -7224,17 +6871,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.customId === "panel_coinflip") {
         if (interaction.channelId !== COINFLIP_CHANNEL_ID) {
-          return interaction.reply({
+          return respondInteraction(interaction, {
             content: `🪙 Coinflip доступен только в канале <#${COINFLIP_CHANNEL_ID}>.`,
             ephemeral: true,
           });
         }
 
-        return interaction.reply(coinflipPanel());
+        return respondInteraction(interaction, coinflipPanel());
       }
 
       if (interaction.customId === "panel_lottery") {
-        return interaction.reply(lotteryPanel());
+        return respondInteraction(interaction, lotteryPanel());
       }
 
       if (interaction.customId === "lottery_random") {
@@ -7275,44 +6922,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.customId.startsWith("bet:")) {
         const [, eventIdRaw, optionIdRaw] = interaction.customId.split(":");
-
         const eventId = Number(eventIdRaw);
         const optionId = Number(optionIdRaw);
 
-        const event = await prisma.rpEvent.findUnique({
-          where: {
-            id: eventId,
-          },
-          include: {
-            options: true,
-          },
-        });
-
-        if (!event) {
-          return interaction.reply({
-            content: "Событие не найдено.",
+        if (!Number.isInteger(eventId) || !Number.isInteger(optionId)) {
+          return respondInteraction(interaction, {
+            content: "Некорректная кнопка ставки. Обнови карточку события.",
             ephemeral: true,
           });
         }
 
-        if (event.status !== "OPEN" || isEventClosed(event)) {
-          await closeExpiredEvents();
-
-          return interaction.reply({
-            content: "Ставки на это событие уже закрыты.",
-            ephemeral: true,
-          });
-        }
-
-        const option = event.options.find((item) => item.id === optionId);
-
-        if (!option) {
-          return interaction.reply({
-            content: "Исход не найден.",
-            ephemeral: true,
-          });
-        }
-
+        // Форму открываем сразу, чтобы Discord не успел аннулировать interaction.
+        // Существование события, исхода и доступность ставок проверяются после отправки формы.
         const modal = new ModalBuilder()
           .setCustomId(`bet_modal:${eventId}:${optionId}`)
           .setTitle("LS Bet — сумма ставки");
@@ -7333,7 +6954,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isModalSubmit()) {
-<<<<<<< HEAD
+      await deferInteractionReply(interaction, { ephemeral: true });
       if (interaction.customId === "registration_modal") {
         const fullName = interaction.fields.getTextInputValue("fullName").trim();
         const phone = interaction.fields.getTextInputValue("phone").trim();
@@ -7365,16 +6986,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (await adminOnly(interaction)) return;
         const eventId = Number(interaction.fields.getTextInputValue("eventId").trim());
         if (!Number.isInteger(eventId) || eventId <= 0) {
-          return interaction.reply({ content: "Укажи корректный ID события.", ephemeral: true });
+          return respondInteraction(interaction, { content: "Укажи корректный ID события.", ephemeral: true });
         }
         const event = await fullEvent(eventId);
         if (!event) {
-          return interaction.reply({ content: `Событие #${eventId} не найдено.`, ephemeral: true });
+          return respondInteraction(interaction, { content: `Событие #${eventId} не найдено.`, ephemeral: true });
         }
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`admin_event_edit:${event.id}`).setLabel(`✏️ Открыть редактор #${event.id}`).setStyle(ButtonStyle.Primary)
         );
-        return interaction.reply({ content: `Нашёл событие **#${event.id}: ${event.title}**. Нажми кнопку ниже, чтобы открыть форму редактирования.`, components: [row], ephemeral: true });
+        return respondInteraction(interaction, { content: `Нашёл событие **#${event.id}: ${event.title}**. Нажми кнопку ниже, чтобы открыть форму редактирования.`, components: [row], ephemeral: true });
       }
 
       if (interaction.customId.startsWith("admin_event_edit_modal:")) {
@@ -7388,8 +7009,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return adminCancelEvent(interaction, Number(eventIdRaw), reason);
       }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       if (interaction.customId === "promo_edit_modal") {
         const code = interaction.fields.getTextInputValue("code");
         const amount = interaction.fields.getTextInputValue("amount");
@@ -7444,8 +7063,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (interaction.customId === "lottery_custom_modal") {
-<<<<<<< HEAD
-        await interaction.deferReply({
+        await deferInteractionReply(interaction, {
           ephemeral: true,
         });
       
@@ -7458,18 +7076,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
       
-=======
-        const raw = interaction.fields.getTextInputValue("numbers");
-        const parsed = parseLotteryNumbers(raw);
-
-        if (!parsed.ok) {
-          return interaction.reply({
-            content: `❌ ${parsed.error}`,
-            ephemeral: true,
-          });
-        }
-
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
         return buyLotteryTicket(interaction, parsed.numbers);
       }
 
@@ -7486,23 +7092,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const comment = interaction.fields.getTextInputValue("comment");
 
         if (!Number.isInteger(amount) || amount <= 0) {
-          return interaction.reply({
+          return respondInteraction(interaction, {
             content: "Введи корректную сумму пополнения.",
             ephemeral: true,
           });
         }
 
-<<<<<<< HEAD
         const verified = await isVerifiedDiscordMember(interaction);
         if (!verified && amount > UNVERIFIED_MAX_TOPUP) {
-          return interaction.reply({
+          return respondInteraction(interaction, {
             content: `⛔ Для неверифицированных пользователей лимит пополнения за раз: **${money(UNVERIFIED_MAX_TOPUP)}**.\n\n${unverifiedLimitText()}`,
             ephemeral: true,
           });
         }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
         return createTopUpTicket(interaction, login, amount, comment);
       }
 
@@ -7521,13 +7124,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         );
       }
 
-<<<<<<< HEAD
-      if (interaction.customId.startsWith("crash_bet_modal:") || interaction.customId === "crash_bet_custom_modal") {
+      if (interaction.customId.startsWith("crash_bet_modal:") || interaction.customId.startsWith("crash_bet_custom_modal:")) {
         return applyCrashBet(interaction);
       }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       if (!interaction.customId.startsWith("bet_modal:")) return;
 
       const [, eventIdRaw, optionIdRaw] = interaction.customId.split(":");
@@ -7537,23 +7137,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const amount = Number(interaction.fields.getTextInputValue("amount"));
 
       if (!Number.isInteger(amount) || amount <= 0) {
-        return interaction.reply({
+        return respondInteraction(interaction, {
           content: "Введи корректную сумму ставки.",
           ephemeral: true,
         });
       }
 
-<<<<<<< HEAD
       const verified = await isVerifiedDiscordMember(interaction);
       if (!verified && amount > UNVERIFIED_MAX_BET) {
-        return interaction.reply({
+        return respondInteraction(interaction, {
           content: `⛔ Для неверифицированных пользователей лимит ставки: **${money(UNVERIFIED_MAX_BET)}**.\n\n${unverifiedLimitText()}`,
           ephemeral: true,
         });
       }
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
       const user = await userOf(interaction.user);
 
       const event = await prisma.rpEvent.findUnique({
@@ -7566,7 +7163,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
 
       if (!event) {
-        return interaction.reply({
+        return respondInteraction(interaction, {
           content: "Событие не найдено.",
           ephemeral: true,
         });
@@ -7575,7 +7172,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (event.status !== "OPEN" || isEventClosed(event)) {
         await closeExpiredEvents();
 
-        return interaction.reply({
+        return respondInteraction(interaction, {
           content: "Ставки на это событие уже закрыты.",
           ephemeral: true,
         });
@@ -7584,14 +7181,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const option = event.options.find((item) => item.id === optionId);
 
       if (!option) {
-        return interaction.reply({
+        return respondInteraction(interaction, {
           content: "Исход не найден.",
           ephemeral: true,
         });
       }
 
       if (user.balance < amount) {
-<<<<<<< HEAD
         await log("EVENT_BET_FAILED", "⚠️ Неудачная ставка", `Игрок <@${interaction.user.id}> попытался сделать ставку, но не хватило баланса.`, [
           { name: "Событие", value: event.title, inline: false },
           { name: "Исход", value: option.title, inline: true },
@@ -7599,9 +7195,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           { name: "Баланс", value: money(user.balance), inline: true },
         ], { userId: user.id, channelId: interaction.channelId });
 
-=======
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-        return interaction.reply({
+        return respondInteraction(interaction, {
           content: `Недостаточно средств. Твой баланс: **${money(
             user.balance
           )}**.`,
@@ -7611,7 +7205,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const potentialWin = Math.floor(amount * option.odds);
 
-<<<<<<< HEAD
       let jackpotInfo = null;
       try {
         await prisma.$transaction(async (tx) => {
@@ -7657,7 +7250,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       } catch (error) {
         if (error?.code === "EVENT_CLOSED") {
           await closeExpiredEvents();
-          return interaction.reply({ content: "Ставки на это событие уже закрыты.", ephemeral: true });
+          return respondInteraction(interaction, { content: "Ставки на это событие уже закрыты.", ephemeral: true });
         }
 
         if (isInsufficientBalance(error)) {
@@ -7669,7 +7262,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             { name: "Баланс", value: money(freshUser?.balance || 0), inline: true },
           ], { userId: user.id, channelId: interaction.channelId });
 
-          return interaction.reply({
+          return respondInteraction(interaction, {
             content: `Недостаточно средств. Твой баланс: **${money(freshUser?.balance || 0)}**.`,
             ephemeral: true,
           });
@@ -7689,46 +7282,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         { name: "Коэффициент", value: `x${option.odds}`, inline: true },
         { name: "Возможный выигрыш", value: money(potentialWin), inline: true },
       ], { userId: user.id, channelId: interaction.channelId });
-=======
-      await prisma.$transaction([
-        prisma.user.update({
-          where: {
-            id: user.id,
-          },
-          data: {
-            balance: {
-              decrement: amount,
-            },
-          },
-        }),
 
-        prisma.bet.create({
-          data: {
-            userId: user.id,
-            eventId,
-            optionId,
-            amount,
-            potentialWin,
-            status: "ACTIVE",
-          },
-        }),
-
-        prisma.transaction.create({
-          data: {
-            userId: user.id,
-            amount: -amount,
-            type: "EVENT_BET",
-            comment: `Ставка на событие "${event.title}". Исход: ${
-              option.title
-            }. Возможный выигрыш: ${money(potentialWin)}`,
-          },
-        }),
-      ]);
-
-      await updateEventMessage(eventId);
->>>>>>> 417a04767142838813b515bcc8f2fc38da4228e9
-
-      return interaction.reply({
+      return respondInteraction(interaction, {
         content:
           `✅ **Ставка принята**\n` +
           `Событие: **${event.title}**\n` +
@@ -7740,20 +7295,31 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
   } catch (error) {
-    console.error(error);
-
-    if (interaction.replied || interaction.deferred) {
-      return interaction.followUp({
-        content: "Произошла ошибка. Посмотри консоль.",
-        ephemeral: true,
-      });
-    }
-
-    return interaction.reply({
-      content: "Произошла ошибка. Посмотри консоль.",
-      ephemeral: true,
-    });
+    await safelyHandleInteractionError(interaction, error);
   }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`🛑 Получен ${signal}. Завершаю работу...`);
+
+  try {
+    client.destroy();
+    await prisma.$disconnect();
+  } catch (error) {
+    console.error("Ошибка при завершении работы:", error);
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.once("SIGINT", () => shutdown("SIGINT"));
+
+client.login(process.env.DISCORD_TOKEN).catch(async (error) => {
+  console.error("❌ Не удалось авторизовать Discord-бота:", error);
+  await prisma.$disconnect().catch(() => null);
+  process.exit(1);
+});
